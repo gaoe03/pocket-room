@@ -1,0 +1,21 @@
+{
+  "name": "pocket-room",
+  "productName": "Pocket Room",
+  "version": "0.1.0",
+  "description": "A local clip browser and batch color editor for DJI footage",
+  "main": "src/main.cjs",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test tests/*.test.cjs",
+    "package": "electron-packager . 'Pocket Room' --platform=darwin --arch=arm64 --out=dist --overwrite --icon=assets/icon/AppIcon --ignore='^/(dist|tests|assets/icon|\\..*|[^/]*\\.md)'"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "@playwright/test": "^1.58.0",
+    "electron": "^44.4.3"
+  },
+  "dependencies": {
+    "three": "0.180.0"
+  }
+}
