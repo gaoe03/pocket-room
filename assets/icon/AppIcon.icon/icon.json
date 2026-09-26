@@ -1,0 +1,14 @@
+{
+  "fill" : { "solid" : "srgb:0.78824,0.21176,0.16471,1.00000" },
+  "groups" : [
+    {
+      "layers" : [
+        { "glass" : true, "image-name" : "pr.png", "name" : "pr" }
+      ],
+      "shadow" : { "kind" : "neutral", "opacity" : 0.4 },
+      "specular" : true,
+      "translucency" : { "enabled" : false, "value" : 0 }
+    }
+  ],
+  "supported-platforms" : { "squares" : "shared" }
+}
