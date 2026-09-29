@@ -64,3 +64,15 @@ test('concurrent export guard, cancellation cleanup and source descendants',asyn
  assert.equal(e.jobs.state,'cancelled');assert.deepEqual(e.exportRecords,{});assert.equal((await fs.readdir(output)).length,0);
  await fs.rm(temp,{recursive:true,force:true});
 });
+test('thumbnails come from the fast keyframe path and fall back when it finds no frame',async()=>{
+ const temp=await fs.mkdtemp(path.join(os.tmpdir(),'pocket-thumb-'));
+ try{
+  const source=path.join(temp,'source');await fs.mkdir(source);
+  // One keyframe at the start: the keyframe-only read after 20% finds nothing, so the
+  // software fallback must still produce a thumbnail.
+  await run(ff,['-v','error','-f','lavfi','-i','testsrc2=size=640x360:rate=30:duration=3','-c:v','libx264','-g','1000','-pix_fmt','yuv420p','-y',path.join(source,'onekey.mp4')]);
+  await run(ff,['-v','error','-f','lavfi','-i','testsrc2=size=640x360:rate=30:duration=3','-c:v','libx264','-g','15','-pix_fmt','yuv420p','-y',path.join(source,'gop.mp4')]);
+  const e=new MediaEngine({dataDir:path.join(temp,'data'),lutDir:await testLuts()});await e.init();await e.scan(source);
+  for(const c of e.clips){const url=await e.thumbnail(c.id);assert.match(url,/^data:image\/jpeg;base64,/);assert.ok(url.length>2000,c.name);}
+ }finally{await fs.rm(temp,{recursive:true,force:true});}
+});

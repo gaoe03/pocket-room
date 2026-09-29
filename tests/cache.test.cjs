@@ -21,6 +21,8 @@ test('launch survives old Chromium cache folders and prunes only owned files',as
   const snapshot=await engine.init();assert.equal(Array.isArray(snapshot.clips),true);
   assert.deepEqual((await fs.readdir(legacy)).sort(),['Cache_Data','No_Vary_Search']);
   assert.equal(await fs.readFile(path.join(legacy,'Cache_Data','index'),'utf8'),'chromium');
-  assert.deepEqual((await fs.readdir(current)).sort(),['fedcba9876543210fedcba98-thumb.jpg','notes.txt','stray-folder']);
+  // Old thumbnails stay. Other owned files expire after 7 days.
+  assert.deepEqual((await fs.readdir(current)).sort(),['89abcdef0123456789abcdef-thumb.jpg','fedcba9876543210fedcba98-thumb.jpg','notes.txt','stray-folder']);
+  assert.equal(await engine.clearCache(),0);assert.deepEqual((await fs.readdir(current)).sort(),['notes.txt','stray-folder']);
  }finally{await fs.rm(data,{recursive:true,force:true});}
 });

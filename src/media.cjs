@@ -137,14 +137,14 @@ function folderOrganization(source,clips){
 }
 class MediaEngine {
   constructor({dataDir,lutDir,onScan=()=>{},onExport=()=>{}}) {
-    this.dataDir=dataDir;this.cache=path.join(dataDir,'media-cache');this.lutDir=lutDir;this.onScan=onScan;this.onExport=onExport;this.clips=[];this.edits={};this.organization={projects:[],assignments:{},favorites:[]};this.view={};this.exportSettings={};this.exportRecords={};this.exportPresets=[];this.output=path.join(require('node:os').homedir(),'Movies','Pocket Room Exports');this.source='';this.jobs=null;this.children=new Set();this.pending=new Map();
+    this.dataDir=dataDir;this.cache=path.join(dataDir,'media-cache');this.lutDir=lutDir;this.onScan=onScan;this.onExport=onExport;this.clips=[];this.edits={};this.organization={projects:[],assignments:{},favorites:[]};this.view={};this.exportSettings={};this.exportRecords={};this.exportPresets=[];this.preferences={autoplay:true};this.output=path.join(require('node:os').homedir(),'Movies','Pocket Room Exports');this.source='';this.jobs=null;this.children=new Set();this.pending=new Map();
   }
   async init(){
     await fs.mkdir(this.cache,{recursive:true});
-    try {const j=JSON.parse(await fs.readFile(path.join(this.dataDir,'library.json'),'utf8'));Object.assign(this,{clips:j.clips||[],edits:j.edits||{},exportSettings:j.exportSettings||{},exportRecords:j.exportRecords||{},exportPresets:j.exportPresets||[],source:j.source||'',output:j.output||this.output,organization:j.organization||this.organization,view:j.view||{}});}catch{}
+    try {const j=JSON.parse(await fs.readFile(path.join(this.dataDir,'library.json'),'utf8'));Object.assign(this,{clips:j.clips||[],edits:j.edits||{},exportSettings:j.exportSettings||{},exportRecords:j.exportRecords||{},exportPresets:j.exportPresets||[],source:j.source||'',output:j.output||this.output,organization:j.organization||this.organization,view:j.view||{},preferences:{...this.preferences,...j.preferences}});}catch{}
     this.organization=cleanOrganization(this.organization);
     if(!Object.keys(this.view).length)this.view=defaultView();
-    this.luts={};for(const k of ['dlog2','dlog2Vivid','dlog','dlogm'])this.luts[k]=await fs.access(path.join(this.lutDir,k+'.cube')).then(()=>true,()=>false);
+    await this.refreshLuts();
     // Cache is disposable. A failed prune must never block launch.
     await this.pruneCache(this.cache).catch(error=>console.error('Cache prune failed',error));
     await this.pruneCache(path.join(this.dataDir,'cache'),0).catch(error=>console.error('Legacy cache prune failed',error));
@@ -156,15 +156,28 @@ class MediaEngine {
   async pruneCache(dir,maxAge=7*864e5){
     let names;try{names=await fs.readdir(dir);}catch(error){if(error.code==='ENOENT')return;throw error;}
     const entries=(await Promise.all(names.filter(n=>OWNED_CACHE.test(n)).map(async n=>({n,s:await fs.lstat(path.join(dir,n)).catch(()=>null)})))).filter(e=>e.s?.isFile());
-    let bytes=0;for(const e of entries.sort((a,b)=>b.s.mtimeMs-a.s.mtimeMs)){bytes+=e.s.size;if(bytes>2e9||Date.now()-e.s.mtimeMs>maxAge)await fs.rm(path.join(dir,e.n),{force:true});}
+    // Thumbnails are small and slow to make, so only the 2 GB cap or a full clear removes them.
+    let bytes=0;for(const e of entries.sort((a,b)=>b.s.mtimeMs-a.s.mtimeMs)){bytes+=e.s.size;const expired=maxAge<=0||(!e.n.endsWith('-thumb.jpg')&&Date.now()-e.s.mtimeMs>maxAge);if(bytes>2e9||expired)await fs.rm(path.join(dir,e.n),{force:true});}
   }
-  snapshot(){return {clips:this.clips,edits:this.edits,luts:this.luts,source:this.source,output:this.output,exportSettings:this.exportSettings,exportRecords:this.exportRecords,exportPresets:this.exportPresets,organization:this.organization,view:this.view};}
+  async refreshLuts(){this.luts={};for(const k of ['dlog2','dlog2Vivid','dlog','dlogm'])this.luts[k]=await fs.access(path.join(this.lutDir,k+'.cube')).then(()=>true,()=>false);return this.luts;}
+  // Exported files of these clips that still match their current edits and still exist.
+  async shareable(ids=[]){
+    const paths=[];let missing=0;
+    for(const id of new Set(ids)){const c=this.clips.find(x=>x.id===id),receipt=this.exportRecords[id];if(!c||!receipt)continue;
+      if(receipt.signature!==signature(c,settingsFor(c,this.edits[id]),this.exportSettings))continue;
+      if(await fs.access(receipt.path).then(()=>true,()=>false))paths.push(receipt.path);else missing++;}
+    return {paths,missing};
+  }
+  async cacheBytes(){let bytes=0;for(const n of await fs.readdir(this.cache).catch(()=>[])){if(!OWNED_CACHE.test(n))continue;const s=await fs.lstat(path.join(this.cache,n)).catch(()=>null);if(s?.isFile())bytes+=s.size;}return bytes;}
+  async clearCache(){if(this.jobs?.state==='running')throw new Error('Wait for the export to finish, then clear the cache.');this.tonalCache?.clear();await this.pruneCache(this.cache,-1);return this.cacheBytes();}
+  snapshot(){return {clips:this.clips,edits:this.edits,luts:this.luts,source:this.source,output:this.output,exportSettings:this.exportSettings,exportRecords:this.exportRecords,exportPresets:this.exportPresets,organization:this.organization,view:this.view,preferences:this.preferences};}
   async save(data={}) {
     if(data.edits) {for(const c of this.clips)if(data.edits[c.id])this.edits[c.id]=settingsFor(c,data.edits[c.id]);}
     if(data.exportSettings)this.exportSettings=data.exportSettings;
     if(Array.isArray(data.exportPresets))this.exportPresets=data.exportPresets.filter(p=>p&&typeof p.name==='string'&&p.name.trim()).map(p=>({name:p.name.trim().slice(0,80),...exportOptions(p)}));
     if(data.organization)this.organization=cleanOrganization(data.organization);
     if(data.view&&typeof data.view==='object'&&!Array.isArray(data.view))this.view=JSON.parse(JSON.stringify(data.view));
+    if(data.preferences&&typeof data.preferences==='object')this.preferences={autoplay:data.preferences.autoplay!==false};
     const value=JSON.stringify(this.snapshot());
     this.saving=(this.saving||Promise.resolve()).catch(()=>{}).then(async()=>{const temp=path.join(this.dataDir,'library.tmp');await fs.writeFile(temp,value);await fs.rename(temp,path.join(this.dataDir,'library.json'));});
     await this.saving;
@@ -220,7 +233,11 @@ class MediaEngine {
     const clip=this.clip(id),out=path.join(this.cache,`${id}-thumb.jpg`);
     if(!await fs.access(out).then(()=>true,()=>false)){
       if(this.pending.has(out))await this.pending.get(out);else{
-        const work=(async()=>{const s=settingsFor(clip),lut=clip.profile==='HLG'?null:await this.lut(clip,s,{allowUnknown:true});await this.process(['-ss',String(Math.min(clip.duration*.2,3)),'-i',clip.path,'-map','0:v:0','-vf',filterGraph(clip,s,lut,{height:180,still:true,before:clip.profile==='HLG'}),'-frames:v','1','-q:v','4','-y',out]);})();
+        // Hardware decoding of the nearest keyframe is about four times faster and gives the
+        // same pixels. Files it cannot handle fall back to a full software decode.
+        const work=(async()=>{const s=settingsFor(clip),lut=clip.profile==='HLG'?null:await this.lut(clip,s,{allowUnknown:true});
+          const args=fast=>[...(fast?['-hwaccel','videotoolbox','-skip_frame','nokey']:[]),'-ss',String(Math.min(clip.duration*.2,3)),'-i',clip.path,'-map','0:v:0','-vf',filterGraph(clip,s,lut,{height:180,still:true,before:clip.profile==='HLG'}),'-frames:v','1','-q:v','4','-y',out];
+          try{await this.process(args(true));if(!(await fs.stat(out)).size)throw new Error('empty thumbnail');}catch{await fs.rm(out,{force:true});await this.process(args(false));}})();
         this.pending.set(out,work);try{await work;}finally{this.pending.delete(out);}
       }
     }
