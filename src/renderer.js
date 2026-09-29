@@ -19,7 +19,7 @@ const state = {
   activeId: null, selected: new Set(), playhead: 0, frameToken: 0,
   previewToken: 0, bulk: false, selectionAnchor: null, colorClipboard: null, exportRecords: {}, exportPresets: [],
   saveTimer: null, saveChain: Promise.resolve(), frameTimer: null, thumbnailObserver: null,
-  thumbQueue: [], thumbLoading: 0, exporting: false
+  thumbQueue: [], thumbLoading: 0, exporting: false, preferences: { autoplay: true }
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -63,7 +63,7 @@ function setupPreview(){
     $('span',els.playPreview).textContent=els.video.paused?'Play preview':'Pause';
   });
   gpu.onError=error=>toast(friendlyError(error),'error');
-  gpu.onEnd=clip=>{if(stream.on&&stream.autoplay&&clip.id===state.activeId)streamStep(1,true);};
+  gpu.onEnd=clip=>{diag(`end ${clip.name} autoplay=${state.preferences.autoplay}`);if(state.preferences.autoplay&&clip.id===state.activeId)streamStep(1,true);};
   for(const type of ['play','pause'])els.video.addEventListener(type,syncStreamBar);
   window.pocketPreview=gpu;
 }
@@ -186,7 +186,7 @@ function currentView() {
 
 function savePayload() {
   state.view = { ...state.view, ...currentView() };
-  return { edits: state.edits, exportSettings: state.exportSettings, organization: state.organization, exportPresets: state.exportPresets, view: state.view };
+  return { edits: state.edits, exportSettings: state.exportSettings, organization: state.organization, exportPresets: state.exportPresets, view: state.view, preferences: state.preferences };
 }
 
 function friendlyError(error, fallback = 'Something went wrong. Try again.') {
@@ -247,6 +247,7 @@ function selectionChanged() {
   if (els.selectedFilter.getAttribute('aria-pressed') === 'true') applyFilters();
   else updateSelectionUI();
   renderActiveClip();
+  updateShareButton();
   scheduleSave();
 }
 
@@ -454,7 +455,8 @@ function setupThumbnailObserver() {
 }
 
 function pumpThumbnails() {
-  while (state.thumbLoading < 1 && state.thumbQueue.length) {
+  // Three at a time keeps the card busy without starving preview playback.
+  while (state.thumbLoading < 3 && state.thumbQueue.length) {
     const node = state.thumbQueue.shift();
     if (!node?.isConnected) continue;
     state.thumbLoading += 1;
@@ -723,6 +725,7 @@ async function scan(path) {
     if (result?.view) state.view = { ...state.view, ...result.view };
     reconcileState();
     renderAll();
+    if (state.activeId) queueFrame();
   } catch (error) {
     toast(friendlyError(error, 'The folder could not be scanned.'), 'error');
   } finally {
@@ -846,7 +849,7 @@ function resetControls(group='all') {
 
 // Streaming mode is session-only. It hides the editor so a shared window shows only
 // the graded picture, and walks the current filtered order.
-const stream={on:false,autoplay:true,idleTimer:null};
+const stream={on:false,idleTimer:null};
 function playable(clip){return resolvedProfile(clip)!=='HLG';}
 function setStreaming(on){
   if(on===stream.on)return;
@@ -883,8 +886,42 @@ function streamStep(offset,auto=false){
   const clips=filteredClips();let index=clips.findIndex(c=>c.id===state.activeId);
   do index+=offset;while(clips[index]&&!playable(clips[index]));
   const next=clips[index];
+  if(auto)diag(`next ${next?.name||'none, end of list'}`);
   if(!next){if(auto)syncStreamBar();return;}
   setActiveClip(next.id);syncStreamBar();playPreview();
+  if(auto)checkAutoplay(next);
+}
+// Records whether the next clip really started. If it has not started within 3 s it gets one
+// more play request, and the log says so.
+function checkAutoplay(clip){
+  let started=false;const onPlaying=()=>{started=true;diag(`playing ${clip.name}`);};
+  els.video.addEventListener('playing',onPlaying,{once:true});
+  setTimeout(()=>{els.video.removeEventListener('playing',onPlaying);if(started||state.activeId!==clip.id)return;const v=els.video;
+    diag(`not playing ${clip.name}: paused=${v.paused} ready=${v.readyState} time=${v.currentTime.toFixed(2)} audio=${gpu?.audio.state}, retrying`);
+    if(v.paused)playPreview();},3000);
+}
+function diag(line){pocket.log?.(line).catch(()=>{});}
+// Settings are saved with the library. Autoplay is one preference shared by the editor
+// preview and streaming mode.
+function setAutoplay(on){state.preferences.autoplay=on;$('#setting-autoplay').checked=on;$('#stream-autoplay').checked=on;scheduleSave();}
+const DEFAULT_PREFERENCES={autoplay:true};
+// The dialog edits a copy. Nothing changes until Save, and Cancel or Esc discards the edits.
+function fillSettings(preferences){$('#setting-autoplay').checked=preferences.autoplay;}
+function saveSettingsDialog(){setAutoplay($('#setting-autoplay').checked);$('#settings-dialog').close();}
+const LUT_NAMES={dlog2:'D-Log2',dlog2Vivid:'D-Log2 vivid',dlog:'D-Log',dlogm:'D-Log M'};
+async function openSettings(){
+  const dialog=$('#settings-dialog');if(dialog.open||els.libraryDialog.open||$('#selection-dialog').open)return;
+  finishAdjustment();fillSettings(state.preferences);dialog.showModal();
+  try{const info=await pocket.settingsInfo();state.luts=info.luts;
+    $('#settings-version').textContent=`Version ${info.version}`;
+    $('#settings-luts').innerHTML=Object.entries(LUT_NAMES).map(([key,name])=>`<li class="${info.luts[key]?'':'missing'}"><span>${name}</span><b>${info.luts[key]?'Installed':'Missing'}</b></li>`).join('');
+    showCacheSize(info.cacheBytes);if(state.activeId)renderActiveClip();
+  }catch(error){toast(friendlyError(error,'Settings could not be loaded.'),'error');}
+}
+function showCacheSize(bytes){$('#settings-cache').textContent=bytes?`Thumbnails and preview files use ${formatBytes(bytes)}. They are made again when needed, so clearing them is safe.`:'No thumbnails or preview files are stored right now.';}
+async function clearCache(){
+  const button=$('#clear-cache');button.disabled=true;
+  try{showCacheSize(await pocket.clearCache());}catch(error){toast(friendlyError(error,'The cache could not be cleared.'),'error');}finally{button.disabled=false;}
 }
 function stopGradedPreview(){gpu?.clear();}
 async function playPreview(){
@@ -948,6 +985,7 @@ function handleExport(event = {}) {
   const labels = { running: 'Exporting', complete: 'Export complete', 'completed-with-errors': 'Finished with errors', cancelled: 'Export cancelled' };
   els.exportState.textContent = labels[event.state] || 'Exporting';
   state.exporting = event.state === 'running';
+  updateShareButton();
   els.cancelExport.classList.toggle('hidden', !state.exporting);
   els.startExport.disabled = state.exporting || state.selected.size === 0;
   if (event.state === 'complete') {
@@ -1035,7 +1073,13 @@ function bindEvents() {
   $('#stream-play').addEventListener('click',playPreview);
   $('#stream-previous').addEventListener('click',()=>streamStep(-1));
   $('#stream-next').addEventListener('click',()=>streamStep(1));
-  $('#stream-autoplay').addEventListener('change',event=>{stream.autoplay=event.target.checked;event.target.blur();});
+  $('#stream-autoplay').addEventListener('change',event=>{setAutoplay(event.target.checked);event.target.blur();});
+  $('#settings-form').addEventListener('submit',event=>{event.preventDefault();saveSettingsDialog();});
+  $('#settings-cancel').addEventListener('click',()=>$('#settings-dialog').close());
+  $('#settings-reset').addEventListener('click',()=>fillSettings(DEFAULT_PREFERENCES));
+  $('#settings-button').addEventListener('click',openSettings);
+  $('#open-lut-folder').addEventListener('click',()=>pocket.openLuts().catch(error=>toast(friendlyError(error,'The LUT folder could not be opened.'),'error')));
+  $('#clear-cache').addEventListener('click',clearCache);
   for(const type of ['mousemove','pointerdown','wheel'])window.addEventListener(type,wakeStream,{passive:true});
   $('.viewer-stage').addEventListener('click',()=>{if(stream.on)playPreview();});
 
@@ -1088,6 +1132,7 @@ function bindEvents() {
     try { await pocket.cancelExport(); } catch (error) { toast(friendlyError(error, 'The export could not be cancelled.'), 'error'); }
     finally { els.cancelExport.disabled = false; }
   });
+  $('#share-exports').addEventListener('click', shareExports);
   els.revealExports.addEventListener('click', () => pocket.reveal().catch(error => toast(friendlyError(error, 'The export folder could not be opened.'), 'error')));
   window.addEventListener('beforeunload', () => {
     window.pocketFlush().catch(() => {});
@@ -1096,13 +1141,13 @@ function bindEvents() {
     if((event.metaKey||event.ctrlKey)&&!event.altKey&&event.key.toLowerCase()==='s'){event.preventDefault();event.stopPropagation();if(!event.repeat)saveSettings();}
   },true);
   window.addEventListener('keydown', event => {
-    if(!stream.on||event.metaKey||event.ctrlKey||event.altKey)return;
+    if(!stream.on||event.metaKey||event.ctrlKey||event.altKey||document.querySelector('dialog[open]'))return;
     wakeStream();
     if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();setStreaming(false);}
     else if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();event.stopImmediatePropagation();streamStep(event.key==='ArrowLeft'?-1:1);}
   },true);
   window.addEventListener('keydown', event => {
-    if($('#selection-dialog').open||els.libraryDialog.open)return;
+    if(document.querySelector('dialog[open]'))return;
     const target = event.target;
     if(event.code==='Space'&&!event.metaKey&&!event.ctrlKey&&!event.altKey&&!isTextEditing()&&!(target instanceof HTMLSelectElement)&&!target?.matches('input[type=checkbox], [role=switch]')){
       event.preventDefault();
@@ -1168,6 +1213,7 @@ function isTextEditing(){const el=document.activeElement;return el?.isContentEdi
 function editCommand(command){
   if(command==='save'){saveSettings();return;}
   if(command==='stream'){setStreaming(!stream.on);return;}
+  if(command==='settings'){openSettings();return;}
   if(isTextEditing()){
     if(command==='undo'||command==='redo')document.execCommand(command);
     return;
@@ -1217,10 +1263,19 @@ function clipStatus(clip){
   if(receipt)labels.push(receipt.signature===adjustments.signature(clip,ensureEdit(clip),state.exportSettings)?'Exported':'Export outdated');
   return labels.join(' / ');
 }
+// Share covers selected clips whose export still matches their edits.
+function shareIds(){return state.clips.filter(c=>state.selected.has(c.id)&&clipStatus(c).includes('Exported')&&!clipStatus(c).includes('outdated')).map(c=>c.id);}
+function updateShareButton(){const button=$('#share-exports'),count=shareIds().length;button.classList.toggle('hidden',!count||state.exporting);button.lastChild.textContent=count===1?'Share 1 clip':`Share ${count} clips`;}
+async function shareExports(){
+  const button=$('#share-exports'),rect=button.getBoundingClientRect();
+  try{const result=await pocket.share({ids:shareIds(),x:rect.left,y:rect.top});if(result.missing)toast(`${result.missing} exported file${result.missing===1?' was':'s were'} moved or deleted, so ${result.missing===1?'it is':'they are'} not included.`,'error');}
+  catch(error){toast(friendlyError(error,'The share menu could not be opened.'),'error');}
+}
 function refreshStatus(){
   for(const node of $$('[data-profile-id]')){const clip=state.clips.find(c=>c.id===node.dataset.profileId);if(clip){node.textContent=profileLabel(clip);node.title=profileDescription(clip);}}
   for(const node of $$('[data-status-id]')){const clip=state.clips.find(c=>c.id===node.dataset.statusId);node.textContent=clip?clipStatus(clip):'';}
   $('#clip-status').textContent=activeClip()?clipStatus(activeClip()):'';
+  updateShareButton();
 }
 function renderPresets(){
   const select=$('#preset-select');
@@ -1296,6 +1351,8 @@ async function init() {
     state.output = data?.output || '';
     state.organization = data?.organization || state.organization;
     state.view = { ...state.view, ...(data?.view || {}) };
+    state.preferences = { ...state.preferences, ...(data?.preferences || {}) };
+    $('#stream-autoplay').checked = state.preferences.autoplay;
     state.activeId = state.view.activeId || null;
     state.playhead = Number(state.view.playhead) || 0;
     state.selected = new Set(Array.isArray(state.view.selected) ? state.view.selected : []);

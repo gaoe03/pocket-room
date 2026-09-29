@@ -1,7 +1,7 @@
 {
   "name": "pocket-room",
   "productName": "Pocket Room",
-  "version": "0.1.0",
+  "version": "0.3.1",
   "description": "A local clip browser and batch color editor for DJI footage",
   "main": "src/main.cjs",
   "private": true,

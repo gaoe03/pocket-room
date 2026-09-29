@@ -24,7 +24,7 @@ void main(){vec3 c=texture(source,vUv).rgb;if(!before){c=clamp(mix(c,tetra(camer
     this.scene=new THREE.Scene();this.scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),this.material));this.camera=new THREE.Camera();
     this.audio=new AudioContext();this.audioSource=this.audio.createMediaElementSource(video);this.gain=this.audio.createGain();this.analyser=this.audio.createAnalyser();this.analyser.fftSize=2048;this.audioSource.connect(this.gain).connect(this.analyser).connect(this.audio.destination);
     this.maxSize=1280;this.decodeLoads=0;this.frames=0;this.version=0;this.draw=()=>{this.frameCallback=video.requestVideoFrameCallback(()=>{if(this.clip){if(this.edit&&!video.paused&&video.currentTime>=this.edit.trimEnd-.015){video.pause();this.ended();}this.render();if(!this.loading&&!video.seeking)this.onTime(video.currentTime);}this.draw();});};this.draw();
-    video.addEventListener('seeked',()=>this.render());video.addEventListener('loadeddata',()=>this.render());video.addEventListener('ended',()=>this.ended());
+    video.addEventListener('seeked',()=>this.render());video.addEventListener('loadeddata',()=>this.render());video.addEventListener('ended',()=>{if(video.ended)this.ended();});
   }
   parseCameraLut(text){
     const parsed=this.loader.parse(text.replace(/\r/g,'').replace(/[\t ]+/g,' ').trim());
@@ -52,8 +52,9 @@ void main(){vec3 c=texture(source,vUv).rgb;if(!before){c=clamp(mix(c,tetra(camer
   // Canvas size only. The color pipeline is the same at every size.
   fit(){if(!this.video.videoWidth)return;const scale=Math.min(1,this.maxSize/this.video.videoWidth,this.maxSize/this.video.videoHeight);this.renderer.setSize(Math.round(this.video.videoWidth*scale),Math.round(this.video.videoHeight*scale),false);}
   setMaxSize(size){if(size===this.maxSize)return;this.maxSize=size;if(this.clip&&!this.loading){this.fit();this.render();}}
-  // Reports the end of the trimmed range once per clip load.
-  ended(){if(!this.clip||this.endedClip===this.loadToken)return;this.endedClip=this.loadToken;this.onEnd?.(this.clip);}
+  // Reports the end of the trimmed range once per started playback. A late "ended" event
+  // from the previous clip is ignored because the element has already moved on.
+  ended(){if(!this.clip||this.playToken!==this.loadToken)return;this.playToken=null;this.onEnd?.(this.clip);}
   clear(){this.loadAbort?.abort();this.loadAbort=new AbortController();this.loadToken=(this.loadToken||0)+1;this.video.pause();this.video.removeAttribute('src');this.video.load();this.canvas.hidden=true;this.clip=null;}
   seek(time){this.pendingSeek=time;if(this.video.readyState&&Math.abs(this.video.currentTime-time)>.025)this.video.currentTime=Math.max(0,Math.min(time,this.video.duration-.025));}
   render(){if(!this.video.videoWidth||this.video.readyState<2)return;this.videoTexture.needsUpdate=true;this.renderer.render(this.scene,this.camera);this.frames++;this.canvas.dataset.renderVersion=String(this.version);this.canvas.dataset.gradeReady=String(this.appliedToneKey===this.toneKey&&this.appliedCameraKey===this.cameraKey);this.canvas.dataset.mediaTime=String(this.video.currentTime);this.canvas.dispatchEvent(new Event('grade-rendered'));}
@@ -82,6 +83,8 @@ void main(){vec3 c=texture(source,vUv).rgb;if(!before){c=clamp(mix(c,tetra(camer
       this.tone.dispose();this.tone=this.curveTexture(data);this.uniforms.tone.value=this.tone;this.appliedToneKey=next.key;this.render();
     }}catch(error){this.onError?.(error);}finally{this.toneBusy=false;}
   }
-  async play(){const token=this.loadToken;await this.audio.resume();if(token!==this.loadToken)return;if(this.video.currentTime>=this.edit.trimEnd-.03||this.video.currentTime<this.edit.trimStart)this.seek(this.edit.trimStart);this.endedClip=null;await this.video.play();}
+  // The picture starts at once. A suspended or busy audio device resumes in parallel, so it
+  // can never hold back playback of the next clip.
+  async play(){const token=this.loadToken;this.audio.resume().catch(()=>{});if(this.video.currentTime>=this.edit.trimEnd-.03||this.video.currentTime<this.edit.trimStart)this.seek(this.edit.trimStart);this.playToken=token;await this.video.play();}
   rms(){const values=new Float32Array(this.analyser.fftSize);this.analyser.getFloatTimeDomainData(values);return Math.sqrt(values.reduce((sum,x)=>sum+x*x,0)/values.length);}
 }
