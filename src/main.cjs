@@ -1,8 +1,8 @@
-const {app,BrowserWindow,ipcMain,dialog,shell,Menu} = require('electron');
+const {app,BrowserWindow,ipcMain,dialog,shell,Menu,ShareMenu} = require('electron');
 const path=require('node:path');
 const fs=require('node:fs/promises');
 const {MediaEngine}=require('./media.cjs');
-let win,engine,quitting=false;
+let win,engine,lutDir,quitting=false;
 // Test runs use their own data and stay hidden: no window, no Dock icon, no focus change.
 const testing=Boolean(process.env.POCKET_TEST_DATA);
 if(testing)app.setPath('userData',process.env.POCKET_TEST_DATA);
@@ -26,6 +26,19 @@ const handlers={
   sourceVideo:id=>engine.sourceVideo(id),
   export:data=>engine.export(data),
   cancelExport:()=>engine.cancelExport(),
+  // Autoplay steps, so a failure on the user's Mac can be read afterwards. Capped at 256 KB.
+  log:async line=>{const file=path.join(app.getPath('userData'),'autoplay.log');const size=await fs.stat(file).then(s=>s.size,()=>0);if(size>256e3)await fs.rename(file,file+'.old').catch(()=>{});await fs.appendFile(file,`${new Date().toISOString()} ${String(line).slice(0,300)}\n`);},
+  settingsInfo:async()=>({version:app.getVersion(),luts:await engine.refreshLuts(),cacheBytes:await engine.cacheBytes()}),
+  clearCache:()=>engine.clearCache(),
+  openLuts:async()=>{const error=await shell.openPath(lutDir);if(error)throw new Error(error);},
+  // Opens the macOS share menu at the button. Test runs return the files instead, so no
+  // native menu appears on screen.
+  share:async({ids,x,y}={})=>{
+    const {paths,missing}=await engine.shareable(Array.isArray(ids)?ids:[]);
+    if(!paths.length)throw new Error(missing?'The exported files were moved or deleted. Export the clips again.':'Export the selected clips first.');
+    if(!testing)new ShareMenu({filePaths:paths}).popup({window:win,x:Math.round(Number(x))||0,y:Math.round(Number(y))||0});
+    return {count:paths.length,missing,...(testing?{paths}:{})};
+  },
   reveal:async()=>{await fs.mkdir(engine.output,{recursive:true});const error=await shell.openPath(engine.output);if(error)throw new Error(error);},
 };
 async function createWindow(){
@@ -58,14 +71,14 @@ async function createWindow(){
 app.whenReady().then(async()=>{
   if(testing){app.setActivationPolicy('accessory');app.dock?.hide();}
   if(!app.isPackaged)app.dock?.setIcon(path.join(__dirname,'../assets/icon/icon.png'));
-  const lutDir=path.join(app.getPath('userData'),'luts');
+  lutDir=path.join(app.getPath('userData'),'luts');
   await fs.mkdir(lutDir,{recursive:true});
   // LUTs are not part of the source. Copy any bundled ones, and keep ones already added to app data.
   for(const key of ['dlog2','dlog2Vivid','dlog','dlogm'])await fs.copyFile(path.join(__dirname,'../assets/luts',key+'.cube'),path.join(lutDir,key+'.cube')).catch(()=>{});
   engine=new MediaEngine({dataDir:app.getPath('userData'),lutDir,onScan:data=>send('scan-progress',data),onExport:data=>send('export-progress',data)});
   await engine.init();
   for(const [name,fn] of Object.entries(handlers))ipcMain.handle('pocket:'+name,async(event,arg)=>{if(event.sender!==win.webContents||event.senderFrame!==win.webContents.mainFrame)throw new Error('Unsupported window');return fn(arg);});
-  Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'Pocket Room',submenu:[{role:'about'},{type:'separator'},{role:'hide'},{role:'hideOthers'},{role:'unhide'},{type:'separator'},{role:'quit'}]},{label:'File',submenu:[{label:'Save settings',accelerator:'CmdOrCtrl+S',click:()=>send('edit-command','save')}]},{label:'Edit',submenu:[{label:'Undo',accelerator:'CmdOrCtrl+Z',click:()=>send('edit-command','undo')},{label:'Redo',accelerator:'CmdOrCtrl+Shift+Z',click:()=>send('edit-command','redo')},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'},{type:'separator'},{label:'Copy color adjustments',accelerator:'CmdOrCtrl+Shift+C',click:()=>send('edit-command','copy')},{label:'Paste color adjustments',accelerator:'CmdOrCtrl+Shift+V',click:()=>send('edit-command','paste')}]},{label:'View',submenu:[{label:'Streaming mode',accelerator:'CmdOrCtrl+Shift+F',click:()=>send('edit-command','stream')},{type:'separator'},{role:'resetZoom'},{role:'zoomIn'},{role:'zoomOut'},{role:'togglefullscreen'}]},{label:'Window',submenu:[{role:'minimize'},{role:'zoom'}]}]));
+  Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'Pocket Room',submenu:[{role:'about'},{type:'separator'},{label:'Settings…',accelerator:'CmdOrCtrl+,',click:()=>send('edit-command','settings')},{type:'separator'},{role:'hide'},{role:'hideOthers'},{role:'unhide'},{type:'separator'},{role:'quit'}]},{label:'File',submenu:[{label:'Save settings',accelerator:'CmdOrCtrl+S',click:()=>send('edit-command','save')}]},{label:'Edit',submenu:[{label:'Undo',accelerator:'CmdOrCtrl+Z',click:()=>send('edit-command','undo')},{label:'Redo',accelerator:'CmdOrCtrl+Shift+Z',click:()=>send('edit-command','redo')},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'},{type:'separator'},{label:'Copy color adjustments',accelerator:'CmdOrCtrl+Shift+C',click:()=>send('edit-command','copy')},{label:'Paste color adjustments',accelerator:'CmdOrCtrl+Shift+V',click:()=>send('edit-command','paste')}]},{label:'View',submenu:[{label:'Streaming mode',accelerator:'CmdOrCtrl+Shift+F',click:()=>send('edit-command','stream')},{type:'separator'},{role:'resetZoom'},{role:'zoomIn'},{role:'zoomOut'},{role:'togglefullscreen'}]},{label:'Window',submenu:[{role:'minimize'},{role:'zoom'}]}]));
   await createWindow();
 }).catch(error=>{dialog.showErrorBox('Pocket Room could not open',error.message);app.quit();});
 app.on('activate',()=>{if(BrowserWindow.getAllWindows().length===0)createWindow();});
