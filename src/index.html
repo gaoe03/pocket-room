@@ -19,6 +19,7 @@
           <span id="clip-count">0 clips</span>
         </div>
         <div class="top-actions">
+          <button class="button ghost icon-only" data-icon="settings" id="settings-button" type="button" aria-label="Settings" title="Settings, Cmd+,"></button>
           <button class="button ghost" data-icon="refresh" id="rescan-button" type="button" disabled>Rescan</button>
           <button class="button primary" data-icon="folder" id="open-folder-button" type="button">Open folder</button>
         </div>
@@ -144,7 +145,7 @@
               <span class="stream-count" id="stream-count"></span>
             </div>
             <div class="stream-options">
-              <label class="stream-autoplay"><input id="stream-autoplay" type="checkbox" role="switch" checked><span>Play next clip</span></label>
+              <label class="stream-autoplay"><input id="stream-autoplay" type="checkbox" checked><span>Play next clip</span></label>
               <button class="button ghost" id="stream-exit" type="button" title="Esc">Exit</button>
             </div>
             <div class="stream-progress" aria-hidden="true"><i id="stream-progress"></i></div>
@@ -252,12 +253,40 @@
             <div class="inspector-footer export-footer">
               <button class="button ghost hidden" id="cancel-export" type="button">Cancel</button>
               <button class="button ghost hidden" data-icon="folder" id="reveal-exports" type="button">Reveal exports</button>
+              <button class="button ghost hidden" data-icon="share" id="share-exports" type="button" title="Send the exported files of the selected clips with AirDrop, Messages and more">Share</button>
               <button class="button primary" data-icon="export" id="start-export" type="button" disabled>Export selected</button>
             </div>
           </section>
         </aside>
       </div>
     </div>
+    <dialog class="settings-dialog" id="settings-dialog" aria-labelledby="settings-title">
+      <form class="settings-shell" id="settings-form">
+        <header class="settings-header"><h2 id="settings-title">Settings</h2><span id="settings-version"></span></header>
+        <div class="settings-body">
+          <section class="settings-group" aria-labelledby="settings-playback">
+            <h3 id="settings-playback">Playback</h3>
+            <div class="settings-box">
+              <label class="settings-check"><input id="setting-autoplay" type="checkbox"><span>Play next clip automatically<small>When a clip ends, the next clip in the list starts. This applies to the editor and to streaming mode.</small></span></label>
+            </div>
+          </section>
+          <section class="settings-group" aria-labelledby="settings-lut-title">
+            <h3 id="settings-lut-title">LUTs</h3>
+            <div class="settings-box">
+              <ul class="settings-luts" id="settings-luts"></ul>
+              <div class="settings-row"><p>Pocket Room converts log footage with DJI's LUTs. Add missing files to the LUT folder, then open Settings again.</p><button class="settings-button" id="open-lut-folder" type="button">Show in Finder</button></div>
+            </div>
+          </section>
+          <section class="settings-group" aria-labelledby="settings-storage">
+            <h3 id="settings-storage">Storage</h3>
+            <div class="settings-box">
+              <div class="settings-row"><p id="settings-cache">Checking cache size</p><button class="settings-button" id="clear-cache" type="button">Clear cache</button></div>
+            </div>
+          </section>
+        </div>
+        <footer class="settings-footer"><button class="settings-button" id="settings-reset" type="button">Restore defaults</button><button class="settings-button" id="settings-cancel" type="button">Cancel</button><button class="settings-button default" id="settings-save" type="submit">Save</button></footer>
+      </form>
+    </dialog>
     <dialog class="library-dialog selection-dialog" id="selection-dialog" aria-labelledby="selection-title">
       <form id="selection-form" class="dialog-shell">
         <header><div><h2 id="selection-title">Select clips</h2><p>Choose a chapter, a number range, or both.</p></div><button data-icon="close" class="dialog-close" id="close-selection" aria-label="Close selection" type="button"></button></header>
