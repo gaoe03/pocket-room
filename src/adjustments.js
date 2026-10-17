@@ -5,7 +5,7 @@
   function exportOptions(options={}){return {resolution:Number(options.resolution)||1080,quality:options.quality||'balanced',maxMB:Number(options.maxMB)||0};}
   function signature(clip,edit={},options={}){
     const s={...DEFAULTS,trimEnd:clip.duration,...edit};
-    return JSON.stringify({pipeline:1,...(s.exposure?{exposurePipeline:'rgb16-gain-v1'}:{}),id:clip.id,profile:s.profile==='auto'?clip.profile:s.profile,...color(s),vivid:s.vivid,trimStart:s.trimStart,trimEnd:s.trimEnd,mute:s.mute,...(s.gainDb?{gainDb:s.gainDb}:{}),...exportOptions(options)});
+    return JSON.stringify({pipeline:1,...(s.exposure?{exposurePipeline:'display-stops-knee-v2'}:{}),id:clip.id,profile:s.profile==='auto'?clip.profile:s.profile,...color(s),vivid:s.vivid,trimStart:s.trimStart,trimEnd:s.trimEnd,mute:s.mute,...(s.gainDb?{gainDb:s.gainDb}:{}),...exportOptions(options)});
   }
   function edited(clip,edit={}){return Object.keys(DEFAULTS).some(k=>(edit[k]??(k==='trimEnd'?clip.duration:DEFAULTS[k]))!==(k==='trimEnd'?clip.duration:DEFAULTS[k]));}
   function rangeIds(clips,anchor,id){const a=clips.findIndex(c=>c.id===anchor),b=clips.findIndex(c=>c.id===id);return a<0||b<0?[id]:clips.slice(Math.min(a,b),Math.max(a,b)+1).map(c=>c.id);}

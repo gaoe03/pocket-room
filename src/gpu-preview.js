@@ -19,8 +19,10 @@ export class GPUPreview {
 ${tetrahedral}
 ${colorBalanceGLSL}
 vec3 q16(vec3 c){return floor(clamp(c,0.0,1.0)*65535.0+0.5)/65535.0;}
+// Same as filterGraph in media.cjs: 2^EV in display light, rolled off above the knee.
+vec3 expose(vec3 c){vec3 x=pow(c,vec3(2.4))*exposure;if(exposure>1.0){float t=0.5,a=(exposure-t)/(1.0-t);vec3 u=(x-t)/(exposure-t);x=mix(x,t+(1.0-t)*a*u/(1.0+(a-1.0)*u),step(t,x));}return pow(clamp(x,0.0,1.0),vec3(1.0/2.4));}
 float curve(float x){int i=int(clamp(x,0.0,1.0)*65535.0+0.5);return texelFetch(tone,ivec2(i%256,i/256),0).r;}
-void main(){vec3 c=texture(source,vUv).rgb;if(!before){c=clamp(mix(c,tetra(camera,clamp(c,0.0,1.0)*(cameraSize-1.0),1.0/cameraSize).rgb,strength),0.0,1.0);if(strength>0.0)c=floor(c*65535.0)/65535.0;c=floor(clamp(c*exposure,0.0,1.0)*65535.0)/65535.0;if(curveEnabled)c=vec3(curve(c.r),curve(c.g),curve(c.b));if(any(notEqual(balance,vec3(0.0))))c=q16(colorBalance(c,balance));float luma=dot(c,vec3(0.2126,0.7152,0.0722));c=q16(vec3(luma)+(c-vec3(luma))*saturation);}result=vec4(clamp(c,0.0,1.0),1.0);}`});
+void main(){vec3 c=texture(source,vUv).rgb;if(!before){c=clamp(mix(c,tetra(camera,clamp(c,0.0,1.0)*(cameraSize-1.0),1.0/cameraSize).rgb,strength),0.0,1.0);if(strength>0.0)c=floor(c*65535.0)/65535.0;if(exposure!=1.0)c=floor(expose(c)*65535.0)/65535.0;if(curveEnabled)c=vec3(curve(c.r),curve(c.g),curve(c.b));if(any(notEqual(balance,vec3(0.0))))c=q16(colorBalance(c,balance));float luma=dot(c,vec3(0.2126,0.7152,0.0722));c=q16(vec3(luma)+(c-vec3(luma))*saturation);}result=vec4(clamp(c,0.0,1.0),1.0);}`});
     this.scene=new THREE.Scene();this.scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),this.material));this.camera=new THREE.Camera();
     this.audio=new AudioContext();this.audioSource=this.audio.createMediaElementSource(video);this.gain=this.audio.createGain();this.analyser=this.audio.createAnalyser();this.analyser.fftSize=2048;this.audioSource.connect(this.gain).connect(this.analyser).connect(this.audio.destination);
     this.maxSize=1280;this.decodeLoads=0;this.frames=0;this.version=0;this.draw=()=>{this.frameCallback=video.requestVideoFrameCallback(()=>{if(this.clip){if(this.edit&&!video.paused&&video.currentTime>=this.edit.trimEnd-.015){video.pause();this.ended();}this.render();if(!this.loading&&!video.seeking)this.onTime(video.currentTime);}this.draw();});};this.draw();
@@ -56,7 +58,8 @@ void main(){vec3 c=texture(source,vUv).rgb;if(!before){c=clamp(mix(c,tetra(camer
   // from the previous clip is ignored because the element has already moved on.
   ended(){if(!this.clip||this.playToken!==this.loadToken)return;this.playToken=null;this.onEnd?.(this.clip);}
   clear(){this.loadAbort?.abort();this.loadAbort=new AbortController();this.loadToken=(this.loadToken||0)+1;this.video.pause();this.video.removeAttribute('src');this.video.load();this.canvas.hidden=true;this.clip=null;}
-  seek(time){this.pendingSeek=time;if(this.video.readyState&&Math.abs(this.video.currentTime-time)>.025)this.video.currentTime=Math.max(0,Math.min(time,this.video.duration-.025));}
+  // Small moves are skipped unless exact, which frame stepping needs at 60 fps.
+  seek(time,exact=false){this.pendingSeek=time;if(this.video.readyState&&(exact?this.video.currentTime!==time:Math.abs(this.video.currentTime-time)>.025))this.video.currentTime=Math.max(0,Math.min(time,this.video.duration-.025));}
   render(){if(!this.video.videoWidth||this.video.readyState<2)return;this.videoTexture.needsUpdate=true;this.renderer.render(this.scene,this.camera);this.frames++;this.canvas.dataset.renderVersion=String(this.version);this.canvas.dataset.gradeReady=String(this.appliedToneKey===this.toneKey&&this.appliedCameraKey===this.cameraKey);this.canvas.dataset.mediaTime=String(this.video.currentTime);this.canvas.dispatchEvent(new Event('grade-rendered'));}
   setGrade(clip,edit,before=false){
     this.edit={...edit};this.version++;const profile=edit.profile==='auto'?clip.profile:edit.profile;
@@ -67,12 +70,34 @@ void main(){vec3 c=texture(source,vUv).rgb;if(!before){c=clamp(mix(c,tetra(camer
     const cameraChanged=cameraKey!==this.cameraKey;this.cameraKey=cameraKey;
     if(['Unknown','HLG','Normal'].includes(profile)){this.uniforms.camera.value=this.identity;this.uniforms.cameraSize.value=2;this.appliedCameraKey=cameraKey;}
     else if(cameraChanged){
-      const promise=this.lutCache.get(cameraKey)||this.api.cameraLut({id:clip.id,settings:edit}).then(text=>text?this.parseCameraLut(text):this.identity);
-      this.lutCache.set(cameraKey,promise);promise.then(t=>{if(cameraKey!==this.cameraKey)return;t.minFilter=t.magFilter=THREE.NearestFilter;this.uniforms.camera.value=t;this.uniforms.cameraSize.value=t.image.width;this.appliedCameraKey=cameraKey;this.render();}).catch(error=>this.onError?.(error));
+      this.cameraTexture(clip,edit,cameraKey).then(t=>{if(cameraKey!==this.cameraKey)return;this.uniforms.camera.value=t;this.uniforms.cameraSize.value=t.image.width;this.appliedCameraKey=cameraKey;this.render();this.onGraded?.();}).catch(error=>this.onError?.(error));
     }
     const toneKeys=['brilliance','contrast','shadows','highlights'];const key=JSON.stringify(toneKeys.map(k=>edit[k]||0));
     if(key!==this.toneKey){this.toneKey=key;this.pendingTone={key,clipId:clip.id,settings:{...edit}};this.pumpTone();}
     this.render();
+  }
+  cameraTexture(clip,edit,key){
+    const promise=this.lutCache.get(key)||this.api.cameraLut({id:clip.id,settings:edit}).then(text=>text?this.parseCameraLut(text):this.identity);
+    this.lutCache.set(key,promise);return promise.then(t=>{t.minFilter=t.magFilter=THREE.NearestFilter;return t;});
+  }
+  // Draws the paused frame through other looks into small canvases. Looks differ only in the
+  // camera LUT and its strength, so the rest of the grade is shared. The main picture is put
+  // back in the same task, so it never shows a look.
+  async drawLooks(clip,edit,looks){
+    if(this.clip?.id!==clip.id||this.video.readyState<2||!this.video.paused)return false;
+    const profile=edit.profile==='auto'?clip.profile:edit.profile;
+    const textures=await Promise.all(looks.map(l=>this.cameraTexture(clip,{...edit,vivid:l.vivid},profile+(l.vivid?'vivid':''))));
+    if(this.clip?.id!==clip.id||this.video.readyState<2)return false;
+    const u=this.uniforms,saved=[u.camera.value,u.cameraSize.value,u.strength.value,u.before.value];
+    const sw=this.canvas.width,sh=this.canvas.height;
+    looks.forEach((l,i)=>{
+      u.camera.value=textures[i];u.cameraSize.value=textures[i].image.width;u.strength.value=l.strength;u.before.value=false;
+      this.videoTexture.needsUpdate=true;this.renderer.render(this.scene,this.camera);
+      // Fill the tile like a thumbnail, cropping instead of stretching.
+      const scale=Math.max(l.canvas.width/sw,l.canvas.height/sh),cw=l.canvas.width/scale,ch=l.canvas.height/scale;
+      l.canvas.getContext('2d').drawImage(this.canvas,(sw-cw)/2,(sh-ch)/2,cw,ch,0,0,l.canvas.width,l.canvas.height);
+    });
+    [u.camera.value,u.cameraSize.value,u.strength.value,u.before.value]=saved;this.render();return true;
   }
   async pumpTone(){
     if(this.toneBusy)return;this.toneBusy=true;
@@ -80,7 +105,7 @@ void main(){vec3 c=texture(source,vUv).rgb;if(!before){c=clamp(mix(c,tetra(camer
       if(next.clipId!==this.clip?.id&&next.key!==this.toneKey)continue;
       const bytes=Uint8Array.from(atob(result.data),c=>c.charCodeAt(0));const view=new DataView(bytes.buffer),data=new Float32Array(65536);
       for(let i=0;i<65536;i++)data[i]=view.getUint16(i*2,true)/65535;
-      this.tone.dispose();this.tone=this.curveTexture(data);this.uniforms.tone.value=this.tone;this.appliedToneKey=next.key;this.render();
+      this.tone.dispose();this.tone=this.curveTexture(data);this.uniforms.tone.value=this.tone;this.appliedToneKey=next.key;this.render();this.onGraded?.();
     }}catch(error){this.onError?.(error);}finally{this.toneBusy=false;}
   }
   // The picture starts at once. A suspended or busy audio device resumes in parallel, so it

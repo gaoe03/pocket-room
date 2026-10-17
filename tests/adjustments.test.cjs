@@ -28,7 +28,7 @@ test('exposure correction invalidates only nonzero exposure receipts',()=>{
  const zero=JSON.parse(signature(clip,{exposure:0},{}));
  assert.equal('exposurePipeline' in zero,false);
  const nonzero=JSON.parse(signature(clip,{exposure:.2},{}));
- assert.equal(nonzero.exposurePipeline,'rgb16-gain-v1');
+ assert.equal(nonzero.exposurePipeline,'display-stops-knee-v2');
  const legacy={...nonzero};delete legacy.exposurePipeline;
  assert.notEqual(JSON.stringify(legacy),signature(clip,{exposure:.2},{}));
 });

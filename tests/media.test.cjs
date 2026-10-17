@@ -3,9 +3,18 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs/promises');
 const os=require('node:os');
 const path=require('node:path');
-const {MediaEngine,identify,probe,settingsFor,run}=require('../src/media.cjs');
+const {MediaEngine,identify,probe,settingsFor,hlgCube,run}=require('../src/media.cjs');
 const ff='/opt/homebrew/bin/ffmpeg';
 const root=path.resolve(__dirname,'..');
+test('the HLG conversion keeps black, puts reference white near 90% and keeps grays in order',()=>{
+ const lines=hlgCube(33).trim().split('\n'),rows=lines.slice(1).map(l=>l.split(' ').map(Number));
+ assert.equal(lines[0],'LUT_3D_SIZE 33');assert.equal(rows.length,33**3);
+ assert.deepEqual(rows[0],[0,0,0]);
+ const gray=i=>rows[i+i*33+i*33*33];
+ for(let i=1;i<33;i++){assert.ok(gray(i)[0]>gray(i-1)[0]);assert.ok(Math.abs(gray(i)[0]-gray(i)[2])<1e-3);}
+ assert.ok(Math.abs(gray(24)[0]-.915)<.02,`75% HLG gave ${gray(24)[0]}`);
+ assert.equal(gray(32)[0],1);
+});
 test('DJI BT.709 without a gamma tag remains unknown',()=>{
  assert.equal(identify({encoder:'DJI OsmoPocket3'},{color_transfer:'bt709'}),'Unknown');
  assert.equal(identify({'com.dji.camera.ColorGammaSxS':'D-Log2'},{color_transfer:'bt709'}),'D-Log2');
@@ -23,7 +32,8 @@ test('real processing, mixed profiles, trims, metadata, persistence and collisio
  const unknown={...c,id:'unknown',profile:'Unknown'};engine.clips.push(unknown);
  await assert.rejects(()=>engine.export({ids:['unknown'],output}),/Choose the recorded/);
  const hdr={...c,id:'hdr',profile:'HLG'};engine.clips.push(hdr);
- await assert.rejects(()=>engine.export({ids:['hdr'],output}),/HDR footage/);
+ assert.match(await engine.frame({id:'hdr',time:.5,settings:{exposure:.5}}),/^data:image\/png;base64,/);
+ assert.match(await engine.lut(hdr,settingsFor(hdr,{lutStrength:0})),/hlgv1-100-v2\.cube$/);
  for(const profile of ['D-Log','D-Log2','D-Log M']){
   for(const strength of [0,50,100]){const result=await engine.frame({id:c.id,time:.5,settings:{profile,lutStrength:strength,exposure:2,saturation:30,brilliance:30,warmth:10,tint:-10,shadows:20,highlights:-20,contrast:10}});assert.match(result,/^data:image\/png;base64,/);}
  }
@@ -74,5 +84,23 @@ test('thumbnails come from the fast keyframe path and fall back when it finds no
   await run(ff,['-v','error','-f','lavfi','-i','testsrc2=size=640x360:rate=30:duration=3','-c:v','libx264','-g','15','-pix_fmt','yuv420p','-y',path.join(source,'gop.mp4')]);
   const e=new MediaEngine({dataDir:path.join(temp,'data'),lutDir:await testLuts()});await e.init();await e.scan(source);
   for(const c of e.clips){const url=await e.thumbnail(c.id);assert.match(url,/^data:image\/jpeg;base64,/);assert.ok(url.length>2000,c.name);}
+ }finally{await fs.rm(temp,{recursive:true,force:true});}
+});
+test('a graded clip gets its own thumbnail, and only its newest one is kept',async()=>{
+ const temp=await fs.mkdtemp(path.join(os.tmpdir(),'pocket-thumb-grade-'));
+ try{
+  const source=path.join(temp,'source');await fs.mkdir(source);
+  await run(ff,['-v','error','-f','lavfi','-i','testsrc2=size=640x360:rate=30:duration=3','-c:v','libx264','-g','15','-pix_fmt','yuv420p','-y',path.join(source,'clip.mp4')]);
+  const e=new MediaEngine({dataDir:path.join(temp,'data'),lutDir:await testLuts()});await e.init();await e.scan(source);
+  const id=e.clips[0].id,thumbs=async()=>(await fs.readdir(e.cache)).filter(n=>n.endsWith('-thumb.jpg')).sort();
+  const plain=await e.thumbnail({id,settings:{profile:'Normal'}});
+  // A hand-set profile that matches the file looks the same, so it reuses the plain thumbnail.
+  assert.equal(await e.thumbnail({id,settings:{profile:e.clips[0].profile}}),await e.thumbnail(id));
+  const warm=await e.thumbnail({id,settings:{profile:'Normal',warmth:80}});assert.notEqual(warm,plain);
+  const cool=await e.thumbnail({id,settings:{profile:'Normal',warmth:-80}});assert.notEqual(cool,warm);
+  const names=await thumbs();assert.equal(names.length,2,names.join());assert.ok(names.includes(`${id}-thumb.jpg`));
+  // Trim moves the picture to the new start.
+  await e.thumbnail({id,settings:{profile:'Normal',warmth:-80,trimStart:2}});assert.equal((await thumbs()).length,2);
+  assert.ok((await e.cacheBytes())>0);
  }finally{await fs.rm(temp,{recursive:true,force:true});}
 });

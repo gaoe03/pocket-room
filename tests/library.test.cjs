@@ -32,7 +32,7 @@ test('saved edits, manual trips and view survive a reopen',async()=>{
  try {
  const c=clip(169),edits={[c.id]:{profile:'D-Log',lutStrength:61,exposure:.3,trimStart:1,trimEnd:3}};
  const org={...trips(),assignments:{[c.id]:{projectId:'coast',chapterId:'south'}}};
- await fs.writeFile(path.join(dir,'library.json'),JSON.stringify({clips:[c],edits,organization:org,source:'/Volumes/CARD/DCIM/DJI_001',output:'/tmp/my-exports',exportSettings:{resolution:1080}}));
+ await fs.writeFile(path.join(dir,'library.json'),JSON.stringify({exposureScale:'stops',clips:[c],edits,organization:org,source:'/Volumes/CARD/DCIM/DJI_001',output:'/tmp/my-exports',exportSettings:{resolution:1080}}));
  const e=new MediaEngine({dataDir:dir,lutDir:await testLuts()});const initial=await e.init();
  assert.deepEqual(initial.edits,edits);assert.equal(initial.output,'/tmp/my-exports');assert.equal(initial.organization.assignments[c.id].chapterId,'south');
  initial.organization.favorites=[c.id];initial.organization.projects[0].name='Renamed trip';
@@ -40,6 +40,17 @@ test('saved edits, manual trips and view survive a reopen',async()=>{
  await e.save({organization:initial.organization,view});
  const restored=await new MediaEngine({dataDir:dir,lutDir:await testLuts()}).init();
  assert.deepEqual(restored.edits,edits);assert.deepEqual(restored.view,view);assert.equal(restored.organization.projects[0].name,'Renamed trip');assert.deepEqual(restored.organization.favorites,[c.id]);
+ } finally {await fs.rm(dir,{recursive:true,force:true});}
+});
+test('exposure saved before 0.4 becomes stops once',async()=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'pocket-library-'));
+ try {
+ const c=clip(169);
+ await fs.writeFile(path.join(dir,'library.json'),JSON.stringify({clips:[c],edits:{[c.id]:{profile:'D-Log',exposure:.3}}}));
+ const first=await new MediaEngine({dataDir:dir,lutDir:await testLuts()}).init();
+ assert.equal(first.edits[c.id].exposure,.72);
+ const again=await new MediaEngine({dataDir:dir,lutDir:await testLuts()}).init();
+ assert.equal(again.edits[c.id].exposure,.72);
  } finally {await fs.rm(dir,{recursive:true,force:true});}
 });
 test('export quality labels from the interface set different encoding budgets',async()=>{

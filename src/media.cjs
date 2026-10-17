@@ -7,7 +7,8 @@ const {spawn} = require('node:child_process');
 const {pathToFileURL} = require('node:url');
 const FFMPEG = process.env.POCKET_FFMPEG || '/opt/homebrew/bin/ffmpeg';
 const FFPROBE = process.env.POCKET_FFPROBE || '/opt/homebrew/bin/ffprobe';
-const OWNED_CACHE = /^(?:[0-9a-f]{24}(?:-thumb\.jpg|\.mp4)|[A-Za-z0-9]+-\d+-v2\.cube|curve-ramp16\.rgb)$/;
+const OWNED_CACHE = /^(?:[0-9a-f]{24}(?:(?:-[0-9a-f]{12})?-thumb\.jpg|\.mp4)|[A-Za-z0-9]+-\d+-v2\.cube|curve-ramp16\.rgb)$/;
+const EXPOSURE_KNEE = .5;
 const PROFILES = ['auto','D-Log2','D-Log','D-Log M','Normal','Unknown','HLG'];
 const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0,24);
 const clamp = (n,min,max,fallback=0) => Number.isFinite(Number(n)) ? Math.min(max,Math.max(min,Number(n))) : fallback;
@@ -63,8 +64,28 @@ async function probe(file) {
   let profile=identify(t,s);if(profile==='Unknown'&&/OsmoPocket3/i.test(t.encoder||''))profile=await pocket3Profile(file);
   return {probe:PROBE_VERSION,id:hash([file,stat.size,stat.mtimeMs]),path:file,name:path.basename(file),size:stat.size,mtimeMs:stat.mtimeMs,duration:Number(j.format.duration),width:s.width,height:s.height,fps:fps[0]/fps[1],camera:t.encoder||'Video',profile,date:(path.basename(file).match(/DJI_(\d{4})(\d{2})(\d{2})/)||[]).slice(1).join('-')||t.creation_time?.slice(0,10)||'',lens:t['com.dji.camera.LensType']||''};
 }
+// HLG to SDR as a 3D LUT, so HLG runs through the same LUT stage as the DJI log profiles.
+// Input is full-range BT.2020 RGB with the HLG curve (ARIB STD-B67). HLG reference white
+// (75% signal, 203 nits on a 1000 nit display) lands near 90% SDR, brighter parts roll off
+// toward white, and BT.2020 colors are converted to BT.709. Output is display RGB, gamma 2.4.
+function hlgCube(size=65){
+  const a=.17883277,b=.28466892,c=.55991073,white=.203,knee=.6;
+  const linear=e=>e<=.5?e*e/3:(Math.exp((e-c)/a)+b)/12;
+  const peak=1/white,k=(peak-knee)/(1-knee);
+  const lines=[`LUT_3D_SIZE ${size}`];
+  for(let bi=0;bi<size;bi++)for(let gi=0;gi<size;gi++)for(let ri=0;ri<size;ri++){
+    const [r,g,bl]=[ri,gi,bi].map(i=>linear(i/(size-1)));
+    // HLG system gamma 1.2 for a 1000 nit display, then reference white to 1.
+    const y=.2627*r+.678*g+.0593*bl,ootf=y>0?y**.2/white:0;
+    let rgb=[1.6605*r-.5876*g-.0728*bl,-.1246*r+1.1329*g-.0083*bl,-.0182*r-.1006*g+1.1187*bl].map(v=>Math.max(0,v*ootf));
+    const m=Math.max(...rgb);
+    if(m>knee){const u=(m-knee)/(peak-knee),t=knee+(1-knee)*k*u/(1+(k-1)*u);rgb=rgb.map(v=>v*t/m);}
+    lines.push(rgb.map(v=>Math.min(1,v)**(1/2.4)).map(v=>v.toFixed(6)).join(' '));
+  }
+  return lines.join('\n')+'\n';
+}
 function settingsFor(clip,input={}) {
-  const s={profile:PROFILES.includes(input.profile)?input.profile:'auto',lutStrength:clamp(input.lutStrength??100,0,100),vivid:!!input.vivid,mute:!!input.mute,gainDb:clamp(input.gainDb,-60,12),exposure:clamp(input.exposure,-2,2)};
+  const s={profile:PROFILES.includes(input.profile)?input.profile:'auto',lutStrength:clamp(input.lutStrength??100,0,100),vivid:!!input.vivid,mute:!!input.mute,gainDb:clamp(input.gainDb,-60,12),exposure:clamp(input.exposure,-3,3)};
   for(const k of ['brilliance','contrast','highlights','shadows','saturation','warmth','tint'])s[k]=clamp(input[k],-100,100);
   s.trimStart=clamp(input.trimStart??0,0,Math.max(0,clip.duration-.05));
   s.trimEnd=clamp(input.trimEnd??clip.duration,s.trimStart+.05,clip.duration,clip.duration);
@@ -73,15 +94,19 @@ function settingsFor(clip,input={}) {
 function effectiveProfile(clip,s) {return s.profile==='auto'?clip.profile:s.profile;}
 function filterGraph(clip,s,lut,{height=1080,before=false,still=false}={}) {
   // All display adjustments operate in full-range RGB with at least 16-bit precision.
-  // The DJI files tag BT.709 YUV, even when their RGB signal is logarithmic.
+  // The DJI files tag BT.709 YUV, even when their RGB signal is logarithmic. HLG is BT.2020.
   const w=clip.width>=clip.height?Math.round(height*16/9/2)*2:height;
   const h=clip.width>=clip.height?height:Math.round(height*16/9/2)*2;
-  const filters=[`scale=w='min(iw,${w})':h='min(ih,${h})':force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos:in_color_matrix=bt709:out_range=full`, 'format=gbrp16le'];
+  const filters=[`scale=w='min(iw,${w})':h='min(ih,${h})':force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos:in_color_matrix=${effectiveProfile(clip,s)==='HLG'?'bt2020':'bt709'}:out_range=full`, 'format=gbrp16le'];
   if(!before) {
     if(lut)filters.push(`lut3d=file='${lut.replace(/\\/g,'/').replace(/:/g,'\\:').replace(/'/g,"'\\''")}':interp=tetrahedral`);
     // Packed RGB gives lutrgb the full 65535 range. Planar maxval is 65280.
-    // Keep the 2^EV gain in integer RGB, avoiding cross-channel float conversions.
-    if(s.exposure){const expr=`clip(val*${2**s.exposure},0,maxval)`;filters.push(`format=rgb48le,lutrgb=r='${expr}':g='${expr}':b='${expr}',format=gbrp16le`);}
+    // Exposure is a 2^EV gain in display light (gamma 2.4). Above half of white, a brighter
+    // clip rolls off toward white instead of clipping. gpu-preview.js runs the same math.
+    if(s.exposure){const g=2**s.exposure,t=EXPOSURE_KNEE,a=(g-t)/(1-t),x='ld(0)',u=`(${x}-${t})/(${g-t})`;
+      const lift=g>1?`if(gt(${x},${t}),${t}+${1-t}*${a}*${u}/(1+${a-1}*${u}),${x})`:x;
+      const expr=`st(0,pow(val/maxval,2.4)*${g});pow(min(${lift},1),${1/2.4})*maxval`;
+      filters.push(`format=rgb48le,lutrgb=r='${expr}':g='${expr}':b='${expr}',format=gbrp16le`);}
     // Monotonic RGB curve: gentle brilliance plus distinct shadow/highlight weights.
     if(s.brilliance||s.contrast||s.shadows||s.highlights) {
       let previous=0;
@@ -141,7 +166,10 @@ class MediaEngine {
   }
   async init(){
     await fs.mkdir(this.cache,{recursive:true});
-    try {const j=JSON.parse(await fs.readFile(path.join(this.dataDir,'library.json'),'utf8'));Object.assign(this,{clips:j.clips||[],edits:j.edits||{},exportSettings:j.exportSettings||{},exportRecords:j.exportRecords||{},exportPresets:j.exportPresets||[],source:j.source||'',output:j.output||this.output,organization:j.organization||this.organization,view:j.view||{},preferences:{...this.preferences,...j.preferences}});}catch{}
+    try {const j=JSON.parse(await fs.readFile(path.join(this.dataDir,'library.json'),'utf8'));Object.assign(this,{clips:j.clips||[],edits:j.edits||{},exportSettings:j.exportSettings||{},exportRecords:j.exportRecords||{},exportPresets:j.exportPresets||[],source:j.source||'',output:j.output||this.output,organization:j.organization||this.organization,view:j.view||{},preferences:{...this.preferences,...j.preferences}});
+      // Before 0.4 exposure was a gain on encoded RGB, 2.4 times stronger than its label.
+      // Old values become real stops, so saved clips look the same below the roll-off.
+      if(j.exposureScale!=='stops')for(const e of Object.values(this.edits))if(e?.exposure)e.exposure=Math.round(e.exposure*2.4*1e6)/1e6;}catch{}
     this.organization=cleanOrganization(this.organization);
     if(!Object.keys(this.view).length)this.view=defaultView();
     await this.refreshLuts();
@@ -170,7 +198,7 @@ class MediaEngine {
   }
   async cacheBytes(){let bytes=0;for(const n of await fs.readdir(this.cache).catch(()=>[])){if(!OWNED_CACHE.test(n))continue;const s=await fs.lstat(path.join(this.cache,n)).catch(()=>null);if(s?.isFile())bytes+=s.size;}return bytes;}
   async clearCache(){if(this.jobs?.state==='running')throw new Error('Wait for the export to finish, then clear the cache.');this.tonalCache?.clear();await this.pruneCache(this.cache,-1);return this.cacheBytes();}
-  snapshot(){return {clips:this.clips,edits:this.edits,luts:this.luts,source:this.source,output:this.output,exportSettings:this.exportSettings,exportRecords:this.exportRecords,exportPresets:this.exportPresets,organization:this.organization,view:this.view,preferences:this.preferences};}
+  snapshot(){return {exposureScale:'stops',clips:this.clips,edits:this.edits,luts:this.luts,source:this.source,output:this.output,exportSettings:this.exportSettings,exportRecords:this.exportRecords,exportPresets:this.exportPresets,organization:this.organization,view:this.view,preferences:this.preferences};}
   async save(data={}) {
     if(data.edits) {for(const c of this.clips)if(data.edits[c.id])this.edits[c.id]=settingsFor(c,data.edits[c.id]);}
     if(data.exportSettings)this.exportSettings=data.exportSettings;
@@ -212,7 +240,10 @@ class MediaEngine {
   async lut(clip,s,{allowUnknown=false}={}) {
     const p=effectiveProfile(clip,s);
     if(p==='Unknown'&&!allowUnknown)throw new Error('Choose the recorded color profile for this clip before previewing or exporting.');
-    if(p==='HLG')throw new Error('HDR footage is not supported in this version. Choose an SDR or log clip.');
+    // The HLG conversion is always full strength. Half converted HDR has no use.
+    if(p==='HLG'){const out=path.join(this.cache,'hlgv1-100-v2.cube');
+      if(!await fs.access(out).then(()=>true,()=>false)){const tmp=out+'.'+crypto.randomUUID()+'.tmp';await fs.writeFile(tmp,hlgCube());await fs.rename(tmp,out);}
+      return out;}
     const key={'D-Log2':s.vivid?'dlog2Vivid':'dlog2','D-Log':'dlog','D-Log M':'dlogm'}[p];
     if(!key||s.lutStrength===0)return null;
     const original=path.join(this.lutDir,key+'.cube');
@@ -229,15 +260,24 @@ class MediaEngine {
     const tmp=out+'.'+crypto.randomUUID()+'.tmp';await fs.writeFile(tmp,mixed.join('\n'));await fs.rename(tmp,out);return out;
   }
   async process(args,options={}){const ctrl=new AbortController();this.children.add(ctrl);try{return await run(FFMPEG,['-hide_banner','-loglevel','error','-nostdin','-threads','2','-filter_threads','2',...args],{...options,signal:options.signal?AbortSignal.any([options.signal,ctrl.signal]):ctrl.signal});}finally{this.children.delete(ctrl);}}
-  async thumbnail(id) {
-    const clip=this.clip(id),out=path.join(this.cache,`${id}-thumb.jpg`);
+  // A thumbnail shows the clip's own grade, so the grid shows what will be sent. An ungraded
+  // clip keeps the plain name, and a graded one gets a name from its grade. Making a new
+  // graded thumbnail removes the clip's older graded ones.
+  async thumbnail(arg) {
+    const id=typeof arg==='string'?arg:arg?.id,clip=this.clip(id),s=settingsFor(clip,typeof arg==='string'?this.edits[id]:arg.settings);
+    const time=s.trimStart+Math.min((s.trimEnd-s.trimStart)*.2,3);
+    const gradeKey=c=>{const p=effectiveProfile(clip,c);return hash([p,c.lutStrength,p==='D-Log2'&&c.vivid,c.exposure,c.brilliance,c.contrast,c.highlights,c.shadows,c.saturation,c.warmth,c.tint,Math.min(clip.duration*.2,3)===time?0:time]);};
+    const plain=clip.profile!=='HLG'&&gradeKey(settingsFor(clip))===gradeKey(s),name=plain?`${id}-thumb.jpg`:`${id}-${gradeKey(s).slice(0,12)}-thumb.jpg`,out=path.join(this.cache,name);
     if(!await fs.access(out).then(()=>true,()=>false)){
       if(this.pending.has(out))await this.pending.get(out);else{
         // Hardware decoding of the nearest keyframe is about four times faster and gives the
         // same pixels. Files it cannot handle fall back to a full software decode.
-        const work=(async()=>{const s=settingsFor(clip),lut=clip.profile==='HLG'?null:await this.lut(clip,s,{allowUnknown:true});
-          const args=fast=>[...(fast?['-hwaccel','videotoolbox','-skip_frame','nokey']:[]),'-ss',String(Math.min(clip.duration*.2,3)),'-i',clip.path,'-map','0:v:0','-vf',filterGraph(clip,s,lut,{height:180,still:true,before:clip.profile==='HLG'}),'-frames:v','1','-q:v','4','-y',out];
-          try{await this.process(args(true));if(!(await fs.stat(out)).size)throw new Error('empty thumbnail');}catch{await fs.rm(out,{force:true});await this.process(args(false));}})();
+        const work=(async()=>{const lut=await this.lut(clip,s,{allowUnknown:true});
+          const args=fast=>[...(fast?['-hwaccel','videotoolbox','-skip_frame','nokey']:[]),'-ss',String(time),'-i',clip.path,'-map','0:v:0','-vf',filterGraph(clip,s,lut,{height:180,still:true}),'-frames:v','1','-q:v','4','-y',out];
+          try{await this.process(args(true));if(!(await fs.stat(out)).size)throw new Error('empty thumbnail');}catch{await fs.rm(out,{force:true});await this.process(args(false));}
+          // HLG thumbnails from before 0.4 show the unconverted picture.
+          if(clip.profile==='HLG')await fs.rm(path.join(this.cache,`${id}-thumb.jpg`),{force:true});
+          if(!plain)for(const n of await fs.readdir(this.cache).catch(()=>[]))if(n!==name&&n.startsWith(id+'-')&&/^[0-9a-f]{24}-[0-9a-f]{12}-thumb\.jpg$/.test(n))await fs.rm(path.join(this.cache,n),{force:true});})();
         this.pending.set(out,work);try{await work;}finally{this.pending.delete(out);}
       }
     }
@@ -326,4 +366,4 @@ class MediaEngine {
   cancelExport(){this.exportAbort?.abort();}
   close(){this.tonalAbort?.abort();this.frameAbort?.abort();this.cancelExport();for(const c of this.children)c.abort();}
 }
-module.exports={MediaEngine,listClips,folderOrganization,protobufVarints,pocket3Mode,probe,identify,settingsFor,effectiveProfile,filterGraph,run};
+module.exports={MediaEngine,listClips,folderOrganization,protobufVarints,pocket3Mode,probe,identify,settingsFor,effectiveProfile,filterGraph,hlgCube,run};

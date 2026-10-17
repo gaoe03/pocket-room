@@ -1,4 +1,5 @@
-const {app,BrowserWindow,ipcMain,dialog,shell,Menu,ShareMenu} = require('electron');
+const {app,BrowserWindow,ipcMain,dialog,shell,Menu,ShareMenu,nativeImage,Notification} = require('electron');
+const {existsSync,readdirSync}=require('node:fs');
 const path=require('node:path');
 const fs=require('node:fs/promises');
 const {MediaEngine}=require('./media.cjs');
@@ -39,10 +40,38 @@ const handlers={
     if(!testing)new ShareMenu({filePaths:paths}).popup({window:win,x:Math.round(Number(x))||0,y:Math.round(Number(y))||0});
     return {count:paths.length,missing,...(testing?{paths}:{})};
   },
+  // The clip card's right-click menu, built from the renderer's items. A chosen item comes back
+  // as a clip-action event, like the app menu's commands. Test runs show no native menu.
+  clipMenu:({id,items}={})=>{
+    const template=(Array.isArray(items)?items.slice(0,20):[]).map(i=>i?.type==='separator'?{type:'separator'}:{label:String(i?.label||'').slice(0,80),enabled:i?.enabled!==false,...(i?.accelerator?{accelerator:String(i.accelerator),registerAccelerator:false}:{}),click:()=>send('clip-action',{id,choice:String(i?.id||'')})});
+    if(!template.length)return;const menu=Menu.buildFromTemplate(template);
+    if(testing)global.pocketClipMenu=menu;else menu.popup({window:win});
+  },
+  // Shows a clip's original, or its export, selected in Finder. Test runs return the path.
+  showInFinder:async({id,exported}={})=>{
+    const clip=engine.clip(id),file=exported?engine.exportRecords[id]?.path:clip.path;
+    if(!file||!await fs.access(file).then(()=>true,()=>false))throw new Error(exported?'The exported file was moved or deleted. Export the clip again.':'The original file is not available. Connect the camera card.');
+    if(!testing)shell.showItemInFolder(file);
+    return testing?{path:file}:{};
+  },
   reveal:async()=>{await fs.mkdir(engine.output,{recursive:true});const error=await shell.openPath(engine.output);if(error)throw new Error(error);},
 };
+// A long export is when you leave the app, so its progress shows on the Dock icon. When it
+// ends while you are in another app, a notification says so. Test runs only record both.
+let lastExportState='';
+function exportFeedback(jobs){
+  if(testing){(global.pocketExportFeedback||=[]).push({state:jobs.state,progress:jobs.progress,focused:win?.isFocused()});}
+  else if(win&&!win.isDestroyed())win.setProgressBar(jobs.state==='running'?Math.max(0,Math.min(1,jobs.progress||0)):-1);
+  const finished=jobs.state!=='running'&&lastExportState==='running';lastExportState=jobs.state;
+  if(!finished||jobs.state==='cancelled'||win?.isFocused())return;
+  const done=jobs.items.filter(i=>i.status==='done').length,failed=jobs.items.filter(i=>i.status==='failed').length;
+  const note={title:failed?'Export finished with errors':'Export complete',body:`${done} clip${done===1?'':'s'} exported${failed?`, ${failed} failed`:''}.`};
+  if(testing){global.pocketExportFeedback.push({notify:note});return;}
+  if(!Notification.isSupported())return;
+  const n=new Notification({...note,silent:false});n.on('click',()=>{if(win&&!win.isDestroyed()){win.show();win.focus();}});n.show();
+}
 async function createWindow(){
-  win=new BrowserWindow({width:1500,height:960,minWidth:1050,minHeight:720,title:'Pocket Room',backgroundColor:'#e9e9ed',show:!testing,webPreferences:{backgroundThrottling:!testing,preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
+  win=new BrowserWindow({width:1500,height:960,minWidth:1050,minHeight:720,title:'Pocket Room',backgroundColor:'#1b1b1d',titleBarStyle:'hiddenInset',trafficLightPosition:{x:14,y:15},show:!testing,webPreferences:{backgroundThrottling:!testing,preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',(event,url)=>{if(url!==win.webContents.getURL())event.preventDefault();});
   win.webContents.session.setPermissionRequestHandler((_w,_p,cb)=>cb(false));
@@ -75,10 +104,24 @@ app.whenReady().then(async()=>{
   await fs.mkdir(lutDir,{recursive:true});
   // LUTs are not part of the source. Copy any bundled ones, and keep ones already added to app data.
   for(const key of ['dlog2','dlog2Vivid','dlog','dlogm'])await fs.copyFile(path.join(__dirname,'../assets/luts',key+'.cube'),path.join(lutDir,key+'.cube')).catch(()=>{});
-  engine=new MediaEngine({dataDir:app.getPath('userData'),lutDir,onScan:data=>send('scan-progress',data),onExport:data=>send('export-progress',data)});
+  engine=new MediaEngine({dataDir:app.getPath('userData'),lutDir,onScan:data=>send('scan-progress',data),onExport:data=>{send('export-progress',data);exportFeedback(data);}});
   await engine.init();
+  // Dragging a card carries its current export out to Finder, Messages or an editor. Only
+  // exports are ever dragged, never the camera originals. The drag has to start while the
+  // mouse is still down, so this is a plain message with synchronous checks.
+  ipcMain.on('pocket:startDrag',(event,ids)=>{
+    if(event.sender!==win?.webContents||!Array.isArray(ids))return;
+    // The window has the live edits, so it picks which exports are current. Paths still come
+    // only from export records.
+    const files=[...new Set(ids.slice(0,500).map(id=>engine.exportRecords[id]?.path).filter(file=>file&&existsSync(file)))];if(!files.length)return;
+    // A graded clip's thumbnail has a grade in its name. Prefer it, so the drag shows the look.
+    const names=readdirSync(engine.cache).filter(n=>n.startsWith(ids[0]+'-')&&n.endsWith('-thumb.jpg'));
+    const thumb=path.join(engine.cache,names.find(n=>n!==`${ids[0]}-thumb.jpg`)||`${ids[0]}-thumb.jpg`);let icon=existsSync(thumb)?nativeImage.createFromPath(thumb):nativeImage.createEmpty();
+    icon=icon.isEmpty()?nativeImage.createFromPath(path.join(__dirname,'brand.png')):icon.resize({width:96});
+    if(testing)global.pocketLastDrag={files};else event.sender.startDrag({file:files[0],files,icon});
+  });
   for(const [name,fn] of Object.entries(handlers))ipcMain.handle('pocket:'+name,async(event,arg)=>{if(event.sender!==win.webContents||event.senderFrame!==win.webContents.mainFrame)throw new Error('Unsupported window');return fn(arg);});
-  Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'Pocket Room',submenu:[{role:'about'},{type:'separator'},{label:'Settings…',accelerator:'CmdOrCtrl+,',click:()=>send('edit-command','settings')},{type:'separator'},{role:'hide'},{role:'hideOthers'},{role:'unhide'},{type:'separator'},{role:'quit'}]},{label:'File',submenu:[{label:'Save settings',accelerator:'CmdOrCtrl+S',click:()=>send('edit-command','save')}]},{label:'Edit',submenu:[{label:'Undo',accelerator:'CmdOrCtrl+Z',click:()=>send('edit-command','undo')},{label:'Redo',accelerator:'CmdOrCtrl+Shift+Z',click:()=>send('edit-command','redo')},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'},{type:'separator'},{label:'Copy color adjustments',accelerator:'CmdOrCtrl+Shift+C',click:()=>send('edit-command','copy')},{label:'Paste color adjustments',accelerator:'CmdOrCtrl+Shift+V',click:()=>send('edit-command','paste')}]},{label:'View',submenu:[{label:'Streaming mode',accelerator:'CmdOrCtrl+Shift+F',click:()=>send('edit-command','stream')},{type:'separator'},{role:'resetZoom'},{role:'zoomIn'},{role:'zoomOut'},{role:'togglefullscreen'}]},{label:'Window',submenu:[{role:'minimize'},{role:'zoom'}]}]));
+  Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'Pocket Room',submenu:[{role:'about'},{type:'separator'},{label:'Settings…',accelerator:'CmdOrCtrl+,',click:()=>send('edit-command','settings')},{type:'separator'},{role:'hide'},{role:'hideOthers'},{role:'unhide'},{type:'separator'},{role:'quit'}]},{label:'File',submenu:[{label:'Open Folder…',accelerator:'CmdOrCtrl+O',click:()=>send('edit-command','open')},{label:'Rescan',accelerator:'CmdOrCtrl+R',click:()=>send('edit-command','rescan')},{type:'separator'},{label:'Save settings',accelerator:'CmdOrCtrl+S',click:()=>send('edit-command','save')}]},{label:'Edit',submenu:[{label:'Undo',accelerator:'CmdOrCtrl+Z',click:()=>send('edit-command','undo')},{label:'Redo',accelerator:'CmdOrCtrl+Shift+Z',click:()=>send('edit-command','redo')},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'},{type:'separator'},{label:'Copy color adjustments',accelerator:'CmdOrCtrl+Shift+C',click:()=>send('edit-command','copy')},{label:'Paste color adjustments',accelerator:'CmdOrCtrl+Shift+V',click:()=>send('edit-command','paste')}]},{label:'View',submenu:[{label:'Grid',accelerator:'CmdOrCtrl+1',click:()=>send('edit-command','grid')},{label:'Viewer',accelerator:'CmdOrCtrl+2',click:()=>send('edit-command','viewer')},{label:'Show Sidebar',accelerator:'CmdOrCtrl+Alt+S',click:()=>send('edit-command','sidebar')},{type:'separator'},{label:'Streaming mode',accelerator:'CmdOrCtrl+Shift+F',click:()=>send('edit-command','stream')},{type:'separator'},{label:'Larger thumbnails',accelerator:'CmdOrCtrl+=',click:()=>send('edit-command','thumbs-larger')},{label:'Larger thumbnails',accelerator:'CmdOrCtrl+Plus',visible:false,click:()=>send('edit-command','thumbs-larger')},{label:'Smaller thumbnails',accelerator:'CmdOrCtrl+-',click:()=>send('edit-command','thumbs-smaller')},{label:'Default thumbnail size',accelerator:'CmdOrCtrl+0',click:()=>send('edit-command','thumbs-default')},{type:'separator'},{role:'togglefullscreen'}]},{label:'Window',submenu:[{role:'minimize'},{role:'zoom'}]}]));
   await createWindow();
 }).catch(error=>{dialog.showErrorBox('Pocket Room could not open',error.message);app.quit();});
 app.on('activate',()=>{if(BrowserWindow.getAllWindows().length===0)createWindow();});

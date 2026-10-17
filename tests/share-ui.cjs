@@ -1,7 +1,7 @@
 const {_electron:electron}=require('playwright'),fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict');
 const {run}=require('../src/media.cjs');
-// Share through the real UI: after an export the button offers the batch, edits make an
-// export outdated, and moved files are reported. Test runs return the files instead of
+// Send through the real UI: Send exports what is new or changed, edits make an export
+// outdated, and moved files are reported. Test runs return the files instead of
 // opening the native share menu, so nothing appears on screen.
 (async()=>{
  const data=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'pocket-share-ui-')));const source=path.join(data,'clips'),output=path.join(data,'exports');await fs.mkdir(source);
@@ -14,20 +14,20 @@ const {run}=require('../src/media.cjs');
  try{
   await p.locator('#rescan-button').click();await p.waitForFunction(()=>document.querySelectorAll('.clip-card').length===2,null,{timeout:30000});
   for(const box of await p.locator('.clip-check input').all())await box.check();
-  await p.locator('#export-tab').click();assert.equal(await p.locator('#share-exports').isVisible(),false);
+  await p.locator('#export-tab').click();assert.equal((await p.locator('#start-export').innerText()).trim(),'Send 2 clips');
   assert.match((await share()).error,/Export the selected clips first/);
-  await p.locator('#start-export').click();await p.waitForFunction(()=>/complete/i.test(document.querySelector('#export-state').textContent),null,{timeout:60000});
-  await p.waitForFunction(()=>!document.querySelector('#share-exports').classList.contains('hidden'));
-  assert.equal((await p.locator('#share-exports').innerText()).trim(),'Share 2 clips');
+  const sent=()=>p.waitForFunction(()=>/complete/i.test(document.querySelector('#export-state').textContent),null,{timeout:60000});
+  await p.locator('#start-export').click();await sent();
   await p.screenshot({path:path.join(data,'share.png')});
   let result=await share();assert.equal(result.count,2);assert.ok(result.paths.every(f=>f.startsWith(output)));
-  await p.locator('#share-exports').click();await p.waitForTimeout(300);assert.equal(await p.locator('.toast.error').count(),0);
-  // An edit makes that clip's export outdated, so it leaves the share.
+  // An edit makes that clip's export outdated, so it leaves the share until it is sent again.
   await p.locator('#edit-tab').click();await p.locator('[data-setting="exposure"]').fill('0.5');await p.locator('[data-setting="exposure"]').dispatchEvent('change');
-  await p.locator('#export-tab').click();await p.waitForFunction(()=>document.querySelector('#share-exports').textContent.trim()==='Share 1 clip');
   await p.evaluate(()=>window.pocketFlush());result=await share();assert.equal(result.count,1);
+  // Send exports only the outdated clip, then both are current again.
+  await p.locator('#export-tab').click();await p.evaluate(()=>{document.querySelector('#export-state').textContent='';});await p.locator('#start-export').click();await sent();
+  await p.evaluate(()=>window.pocketFlush());result=await share();assert.equal(result.count,2);
   // A moved export is reported instead of failing the share.
   await fs.rename(result.paths[0],path.join(data,'moved.mp4'));result=await share();assert.match(result.error,/moved or deleted/);
-  assert.deepEqual(errors,[]);console.log('PASS share after export, outdated exports left out, moved files reported '+data);
+  assert.deepEqual(errors,[]);console.log('PASS send exports then shares, outdated exports left out and resent, moved files reported '+data);
  }finally{await app.close().catch(()=>{});}
 })().catch(error=>{console.error(error);process.exit(1);});

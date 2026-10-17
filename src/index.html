@@ -8,133 +8,123 @@
     <link rel="stylesheet" href="./style.css">
   </head>
   <body>
-    <div class="app-shell">
-      <header class="topbar">
-        <div class="brand">
-          <img class="brand-mark" src="./brand.png" alt="" aria-hidden="true">
-          <strong>Pocket Room</strong>
-        </div>
-        <div class="source-summary">
-          <span id="source-name">No folder selected</span>
-          <span id="clip-count">0 clips</span>
-        </div>
-        <div class="top-actions">
-          <button class="button ghost icon-only" data-icon="settings" id="settings-button" type="button" aria-label="Settings" title="Settings, Cmd+,"></button>
-          <button class="button ghost" data-icon="refresh" id="rescan-button" type="button" disabled>Rescan</button>
-          <button class="button primary" data-icon="folder" id="open-folder-button" type="button">Open folder</button>
+    <div class="app-shell mode-viewer" id="app-shell">
+      <header class="toolbar">
+        <button class="tool" data-icon="sidebar" id="toggle-sidebar" type="button" aria-label="Show or hide the sidebar" title="Sidebar, Cmd+Option+S"></button>
+        <div class="window-title"><strong id="context-title">Pocket Room</strong><span id="clip-count">0 clips</span></div>
+        <div class="toolbar-end">
+          <div class="segmented view-switch" role="radiogroup" aria-label="View">
+            <button data-icon="grid" id="grid-mode" type="button" role="radio" aria-checked="false" aria-label="Grid" title="Grid, G"></button>
+            <button data-icon="viewer" id="viewer-mode" type="button" role="radio" aria-checked="true" aria-label="Viewer" title="Viewer, V"></button>
+          </div>
+          <button class="tool labeled" data-icon="stream" id="stream-toggle" type="button" disabled title="Streaming mode, Shift+Cmd+F">Stream</button>
+          <button class="tool" data-icon="settings" id="settings-button" type="button" aria-label="Settings" title="Settings, Cmd+,"></button>
         </div>
       </header>
 
       <div class="workspace">
-        <aside class="library-panel" aria-label="Clip library">
-          <div class="panel-heading">
-            <div>
-              <h1>Footage</h1>
-              <p id="selection-summary">Select clips to export</p>
-            </div>
-            <div class="selection-actions">
-              <button class="small-action" id="open-selection" type="button">Select range</button>
-              <button class="small-action" id="select-all-filtered" type="button">Select all</button>
-              <button class="icon-button" data-icon="close" id="clear-selection" type="button" aria-label="Clear selection" title="Clear selection"></button>
-            </div>
+        <nav class="sidebar" aria-label="Library">
+          <div class="sidebar-scroll" id="sidebar-list"></div>
+          <div class="scan-progress hidden" id="scan-progress" role="status">
+            <div class="progress-copy"><span>Scanning</span><span id="scan-count">0 / 0</span></div>
+            <div class="progress-track"><i id="scan-progress-bar"></i></div>
           </div>
+          <div class="source">
+            <button class="source-name" id="open-folder-button" type="button" title="Open another folder, Cmd+O"><span data-icon="card" aria-hidden="true"></span><span><strong id="source-name">No folder</strong><small id="source-detail">Choose a folder of clips</small></span></button>
+            <button class="tool" data-icon="refresh" id="rescan-button" type="button" disabled aria-label="Rescan" title="Rescan, Cmd+R"></button>
+          </div>
+        </nav>
 
-          <div class="filters">
-            <div class="trip-row">
-              <label>
-                <span class="sr-only">Trip</span>
-                <select id="project-filter" title="Trip"><option value="">All trips</option></select>
-              </label>
-              <button class="small-button" id="manage-library" type="button">Manage</button>
-            </div>
-            <div class="chapter-chips" id="chapter-chips" aria-label="Chapters"></div>
+        <section class="browser" aria-label="Clips">
+          <div class="browser-bar">
             <label class="search-field">
               <span class="sr-only">Search clips</span>
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="m16 16 4 4"></path></svg>
-              <input id="search-input" type="search" placeholder="Search clips">
+              <input id="search-input" type="search" placeholder="Search">
             </label>
-            <div class="filter-row">
-              <label>
-                <span class="sr-only">Detected profile</span>
-                <select id="profile-filter" title="Filter by the profile detected in the file. Manual overrides are shown on clip cards."><option value="">All profiles</option></select>
-              </label>
-              <label>
-                <span class="sr-only">Date</span>
-                <select id="date-filter"><option value="">Any date</option></select>
-              </label>
-            </div>
-            <div class="review-row">
-              <button class="filter-toggle" data-icon="star" id="favorites-filter" type="button" aria-pressed="false">Favorites</button>
-              <button class="filter-toggle" data-icon="select" id="selected-filter" type="button" aria-pressed="false">Selected</button>
-              <label class="sort-field"><span data-icon="sort" aria-hidden="true"></span><select id="sort-select" aria-label="Sort clips">
-                <option value="oldest">Oldest</option>
-                <option value="newest">Newest</option>
-                <option value="number">Clip number</option>
-                <option value="shortest">Shortest</option>
-                <option value="longest">Longest</option>
-              </select></label>
-              <button class="clear-filters hidden" id="clear-filters" type="button">Clear</button>
-            </div>
+            <select id="show-filter" aria-label="Show" title="Show">
+              <option value="all">All clips</option>
+              <option value="favorites">Favorites</option>
+              <option value="selected">Selected</option>
+            </select>
+            <details class="filter-menu" id="filter-menu">
+              <summary class="tool" data-icon="filter" aria-label="Filter by profile or date" title="Filter by profile or date"></summary>
+              <div class="popover">
+                <label>Profile<select id="profile-filter"><option value="">Any profile</option></select></label>
+                <label>Date<select id="date-filter"><option value="">Any date</option></select></label>
+              </div>
+            </details>
+            <select id="sort-select" aria-label="Sort clips" title="Sort">
+              <option value="oldest">Oldest first</option>
+              <option value="newest">Newest first</option>
+              <option value="number">Clip number</option>
+              <option value="shortest">Shortest</option>
+              <option value="longest">Longest</option>
+            </select>
+            <button class="text-button hidden" id="clear-filters" type="button">Clear filters</button>
           </div>
-
-          <div class="scan-progress hidden" id="scan-progress" role="status">
-            <div class="progress-copy"><span>Scanning folder</span><span id="scan-count">0 / 0</span></div>
-            <div class="progress-track"><i id="scan-progress-bar"></i></div>
-          </div>
-
           <div class="clip-grid" id="clip-grid" aria-live="polite"></div>
-
           <div class="empty-state" id="empty-state">
-            <div class="empty-frame" aria-hidden="true"><span></span></div>
             <h2>Connect your camera</h2>
-            <p>Find footage in your camera folder, or choose another folder.</p>
-            <button class="button primary" id="default-folder-button" type="button">Connect camera</button>
-            <button class="button text-button" id="empty-open-folder" type="button">Choose another folder</button>
+            <p>Pocket Room reads clips straight from the card. It never changes, moves or deletes the files on it.</p>
+            <button class="push primary" id="default-folder-button" type="button">Connect camera</button>
+            <button class="text-button" id="empty-open-folder" type="button">Choose another folder</button>
           </div>
-        </aside>
+          <div class="selection-bar">
+            <span id="selection-summary">No clips selected</span>
+            <button class="text-button" id="open-selection" type="button">Select range</button>
+            <button class="text-button" id="select-all-filtered" type="button">Select all</button>
+            <button class="text-button" id="clear-selection" type="button">Deselect</button>
+          </div>
+        </section>
 
         <main class="viewer-panel">
           <div class="viewer-topline">
             <div class="active-clip-title">
-              <strong id="active-name">No clip selected</strong>
-              <span id="active-meta">Choose a clip from the library</span>
+              <strong id="active-name">No clip</strong>
+              <span id="active-meta"></span>
             </div>
             <div class="viewer-actions">
-              <button class="viewer-nav" data-icon="left" id="previous-clip" type="button" disabled aria-label="Previous clip" title="Previous clip in the current sort order, Left arrow"></button>
-              <button class="viewer-nav" data-icon="right" id="next-clip" type="button" disabled aria-label="Next clip" title="Next clip in the current sort order, Right arrow"></button>
-              <button class="favorite-button" data-icon="star" id="active-favorite" type="button" disabled aria-label="Favorite clip" title="Favorite clip, F"></button>
-              <span class="profile-badge" id="active-profile">No profile</span>
-              <button class="stream-button" data-icon="stream" id="stream-toggle" type="button" disabled title="Streaming mode, Shift+Cmd+F">Stream</button>
+              <button class="tool" data-icon="left" id="previous-clip" type="button" disabled aria-label="Previous clip" title="Previous clip, Left arrow"></button>
+              <button class="tool" data-icon="right" id="next-clip" type="button" disabled aria-label="Next clip" title="Next clip, Right arrow"></button>
+              <button class="tool favorite-button" data-icon="star" id="active-favorite" type="button" disabled aria-label="Favorite clip" title="Favorite, F"></button>
             </div>
           </div>
 
           <div class="viewer-stage" id="viewer-stage">
-            <div class="viewer-placeholder" id="viewer-placeholder">
-              <div class="focus-corners" aria-hidden="true"></div>
-              <p>Your selected clip appears here</p>
-            </div>
+            <div class="viewer-placeholder" id="viewer-placeholder"><p>Choose a clip</p></div>
             <img id="frame-image" alt="Selected clip preview" hidden>
             <video id="preview-video" playsinline hidden></video><canvas id="grade-canvas" hidden></canvas><div id="profile-notice" class="profile-notice" hidden></div>
-            <div class="frame-loading hidden" id="frame-loading" role="status"><span></span>Rendering frame</div>
-            <button class="before-hold hidden" data-icon="compare" id="before-hold" type="button">Hold for before</button>
+            <div class="frame-loading hidden" id="frame-loading" role="status"><span></span>Loading</div>
           </div>
 
           <div class="transport" id="transport">
             <div class="time-row">
-              <span id="current-time">00:00.00</span>
-              <input id="seek-slider" type="range" min="0" max="0" value="0" step="0.01" disabled aria-label="Playhead">
-              <span id="duration-time">00:00.00</span>
+              <span class="timecode" id="current-time">00:00.00</span>
+              <div class="timeline" id="timeline">
+                <div class="timeline-track"><i class="timeline-keep" id="timeline-keep"></i></div>
+                <input id="seek-slider" type="range" min="0" max="0" value="0" step="0.01" disabled aria-label="Playhead">
+                <button class="trim-handle" id="trim-in-handle" type="button" aria-label="Trim start" title="Drag to set the start, I"></button>
+                <button class="trim-handle" id="trim-out-handle" type="button" aria-label="Trim end" title="Drag to set the end, O"></button>
+              </div>
+              <span class="timecode" id="duration-time">00:00.00</span>
             </div>
             <div class="transport-actions">
-              <button class="button ghost" id="mark-start" type="button" disabled>Set trim start</button>
-              <button class="play-button" id="play-preview" title="Play or pause, Space" type="button" disabled>
-                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 5 8 5-8 5Z"></path></svg>
-                <span>Play graded preview</span>
+              <div class="trim-readout">
+                <button class="text-button" id="mark-start" type="button" disabled title="Set the start at the playhead, I">In <b id="trim-start-readout">0.00s</b></button>
+                <button class="text-button" id="mark-end" type="button" disabled title="Set the end at the playhead, O">Out <b id="trim-end-readout">0.00s</b></button>
+              </div>
+              <button class="play-button" id="play-preview" title="Play or pause, Space" type="button" disabled aria-label="Play">
+                <svg viewBox="0 0 24 24" aria-hidden="true"></svg>
+                <span class="sr-only">Play preview</span>
               </button>
-              <button class="button ghost" id="mark-end" type="button" disabled>Set trim end</button>
+              <div class="transport-end">
+                <button class="tool labeled before-hold hidden" data-icon="compare" id="before-hold" type="button" title="Hold to see the original, B">Before</button>
+              </div>
             </div>
-            <div class="trim-readout"><span>In <b id="trim-start-readout">0.00s</b></span><span>Out <b id="trim-end-readout">0.00s</b></span></div>
           </div>
+
+          <div class="filmstrip" id="filmstrip" aria-label="Clips in this view"></div>
 
           <div class="stream-bar" id="stream-bar" hidden>
             <div class="stream-caption"><strong id="stream-title"></strong><span id="stream-meta"></span></div>
@@ -146,17 +136,16 @@
             </div>
             <div class="stream-options">
               <label class="stream-autoplay"><input id="stream-autoplay" type="checkbox" checked><span>Play next clip</span></label>
-              <button class="button ghost" id="stream-exit" type="button" title="Esc">Exit</button>
+              <button class="stream-exit" id="stream-exit" type="button" title="Esc">Exit</button>
             </div>
             <div class="stream-progress" aria-hidden="true"><i id="stream-progress"></i></div>
           </div>
-          <div class="toast-region" id="toast-region" aria-live="polite"></div>
         </main>
 
         <aside class="inspector-panel" aria-label="Inspector">
-          <div class="inspector-tabs" role="tablist">
-            <button class="tab active" id="edit-tab" data-tab="edit" role="tab" aria-selected="true" type="button">Edit</button>
-            <button class="tab" id="export-tab" data-tab="export" role="tab" aria-selected="false" type="button">Export</button>
+          <div class="segmented inspector-tabs" role="tablist">
+            <button class="tab active" id="edit-tab" data-tab="edit" role="tab" aria-selected="true" type="button">Color</button>
+            <button class="tab" id="export-tab" data-tab="export" role="tab" aria-selected="false" type="button">Send</button>
           </div>
 
           <section class="tab-panel" id="edit-panel" role="tabpanel">
@@ -169,44 +158,61 @@
               <div id="color-blocked" class="control-help" role="status" hidden><p id="color-blocked-text"></p><button id="resolve-profile" type="button">Choose input profile</button><button id="edit-previewed" type="button" hidden>Edit previewed clip only</button></div>
               <p id="mixed-hint" class="control-help" hidden>Mixed means the selected clips have different values. Moving a slider sets that value for all selected clips.</p>
               <fieldset id="edit-controls" disabled>
-                <div class="control-section">
-                  <div class="section-title"><h2>Color profile</h2><button class="reset-link" data-reset="profile" type="button">Reset</button></div>
-                  <label class="field-label" for="profile-select">Input profile</label>
-                  <select id="profile-select">
-                    <option id="mixed-profile" value="mixed" disabled hidden>Mixed</option>
-                    <option value="auto">Auto detect</option>
-                    <option value="Normal">Normal</option>
-                    <option value="D-Log M">D-Log M</option>
-                    <option value="D-Log">D-Log</option>
-                    <option value="D-Log2">D-Log2</option>
-                    <option value="HLG">HLG</option>
-                  </select>
-                  <p class="field-hint" id="profile-hint">Uses the profile detected in the clip.</p>
-                  <label class="range-control" id="lut-strength-control">
-                    <span><span>LUT strength</span><output>100</output></span>
-                    <input data-setting="lutStrength" type="range" min="0" max="100" step="1" value="100">
-                  </label>
-                  <label class="toggle-row hidden" id="vivid-row">
-                    <span><strong>Vivid LUT</strong><small>Use the vivid profile conversion</small></span>
-                    <input data-setting="vivid" type="checkbox" role="switch">
-                  </label>
+                <div class="control-section profile-section">
+                    <div class="section-title"><h2>Profile</h2><button class="reset-link" data-reset="profile" type="button">Reset</button></div>
+                    <label class="field-label sr-only" for="profile-select">Input profile</label>
+                    <select id="profile-select">
+                      <option id="mixed-profile" value="mixed" disabled hidden>Mixed</option>
+                      <option value="auto">Auto detect</option>
+                      <option value="Normal">Normal</option>
+                      <option value="D-Log M">D-Log M</option>
+                      <option value="D-Log">D-Log</option>
+                      <option value="D-Log2">D-Log2</option>
+                      <option value="HLG">HLG</option>
+                    </select>
+                    <p class="field-hint" id="profile-hint" hidden></p>
+                </div>
+
+                <div class="control-section look-section" id="look-section" hidden>
+                  <div class="look-row" role="radiogroup" aria-label="Look">
+                    <button class="look-tile" data-look="flat" type="button" role="radio" aria-checked="false" title="The picture as recorded"><canvas width="160" height="90"></canvas><span>Flat</span></button>
+                    <button class="look-tile" data-look="natural" type="button" role="radio" aria-checked="false" title="DJI's conversion"><canvas width="160" height="90"></canvas><span>Natural</span></button>
+                    <button class="look-tile" data-look="vivid" type="button" role="radio" aria-checked="false" title="DJI's vivid conversion, L"><canvas width="160" height="90"></canvas><span>Vivid</span></button>
+                  </div>
                 </div>
 
                 <div class="control-section">
-                  <div class="section-title"><h2>Light</h2></div>
-                  <div id="light-controls"></div>
+                  <div id="basic-controls"></div>
                 </div>
 
-                <div class="control-section">
-                  <div class="section-title"><h2>Color</h2></div>
-                  <div id="color-controls"></div>
-                </div>
+                <details class="more-controls" id="more-controls">
+                  <summary><span class="disclosure" data-icon="right" aria-hidden="true"></span>More</summary>
+                  <div class="control-section">
+                    <label class="range-control" id="lut-strength-control">
+                      <span><span>Look strength</span><output>100</output></span>
+                      <input data-setting="lutStrength" type="range" min="0" max="100" step="1" value="100">
+                    </label>
+                  </div>
 
-                <div class="control-section"><label class="range-control"><span><span>Volume (dB)</span><output>0</output></span><input data-setting="gainDb" type="range" min="-60" max="12" step="1" value="0"></label><p class="field-hint">This clip only. 0 dB keeps the original level.</p></div>
-                <label class="toggle-row mute-row">
-                  <span><strong>Mute audio</strong><small>Remove sound from this clip</small></span>
-                  <input data-setting="mute" type="checkbox" role="switch">
-                </label>
+                  <div class="control-section">
+                    <div class="section-title"><h2>Light</h2></div>
+                    <div id="light-controls"></div>
+                  </div>
+
+                  <div class="control-section">
+                    <div class="section-title"><h2>Color</h2></div>
+                    <div id="color-controls"></div>
+                  </div>
+
+                  <div class="control-section audio-section">
+                    <div class="section-title"><h2>Sound</h2></div>
+                    <label class="range-control"><span><span>Volume, dB</span><output>0</output></span><input data-setting="gainDb" type="range" min="-60" max="12" step="1" value="0"></label>
+                    <label class="toggle-row mute-row">
+                    <span><strong>Mute</strong></span>
+                    <input data-setting="mute" type="checkbox">
+                    </label>
+                  </div>
+                </details>
               </fieldset>
             </div>
             <div class="inspector-footer">
@@ -217,12 +223,21 @@
 
           <section class="tab-panel hidden" id="export-panel" role="tabpanel">
             <div class="inspector-scroll export-settings">
-              <div class="export-intro"><h2>Export selected</h2><p id="export-count">No clips selected</p></div>
+              <div class="export-intro"><h2 id="export-count">No clips selected</h2><p id="export-summary"></p></div>
+              <div class="control-section send-to">
+                <div class="segmented destination" id="destination" role="radiogroup" aria-label="Send to">
+                  <button data-destination="discord" type="button" role="radio" aria-checked="false">Discord</button>
+                  <button data-destination="messages" type="button" role="radio" aria-checked="false">Messages</button>
+                  <button data-destination="full" type="button" role="radio" aria-checked="false">Full quality</button>
+                </div>
+              </div>
+              <details class="more-controls" id="export-more">
+              <summary><span class="disclosure" data-icon="right" aria-hidden="true"></span>More</summary>
               <fieldset id="export-controls">
-                <div class="control-section">
-                  <label class="field-label" for="preset-select">Export preset</label>
-                  <select id="preset-select"><option value="">Custom settings</option><option value="default">1080p balanced</option></select>
-                  <div class="preset-save"><input id="preset-name" maxlength="80" placeholder="Preset name" aria-label="Preset name"><button id="save-preset" type="button">Save preset</button></div>
+                <div class="control-section export-form">
+                  <label class="field-label" for="preset-select">Preset</label>
+                  <select id="preset-select"><option value="">Custom</option><option value="default">1080p balanced</option></select>
+                  <div class="preset-save"><input id="preset-name" maxlength="80" placeholder="Name these settings" aria-label="Preset name"><button id="save-preset" type="button">Save</button></div>
                   <label class="field-label" for="resolution-select">Resolution</label>
                   <select id="resolution-select">
                     <option value="720">720p</option>
@@ -235,14 +250,13 @@
                     <option value="balanced">Balanced</option>
                     <option value="best">Best quality</option>
                   </select>
-                  <label class="field-label" for="max-size-input">Maximum size per clip <span>Optional</span></label>
-                  <div class="unit-input"><input id="max-size-input" type="number" min="1" step="1" placeholder="No limit"><span>MB</span></div>
-                </div>
-                <div class="control-section output-section">
-                  <span class="field-label">Output folder</span>
-                  <button class="folder-picker" id="choose-output" type="button"><span id="output-path">Choose a folder</span><b>Choose</b></button>
+                  <label class="field-label" for="max-size-input">Size limit</label>
+                  <div class="unit-input"><input id="max-size-input" type="number" min="1" step="1" placeholder="None"><span>MB per clip</span></div>
+                  <span class="field-label">Save to</span>
+                  <button class="folder-picker" id="choose-output" type="button"><span id="output-path">Choose a folder</span><b>Change</b></button>
                 </div>
               </fieldset>
+              </details>
               <div class="export-error hidden" id="export-error" role="alert"></div>
               <div class="export-job hidden" id="export-job">
                 <div class="progress-copy"><strong id="export-state">Exporting</strong><span id="export-percent">0%</span></div>
@@ -252,14 +266,14 @@
             </div>
             <div class="inspector-footer export-footer">
               <button class="button ghost hidden" id="cancel-export" type="button">Cancel</button>
-              <button class="button ghost hidden" data-icon="folder" id="reveal-exports" type="button">Reveal exports</button>
-              <button class="button ghost hidden" data-icon="share" id="share-exports" type="button" title="Send the exported files of the selected clips with AirDrop, Messages and more">Share</button>
-              <button class="button primary" data-icon="export" id="start-export" type="button" disabled>Export selected</button>
+              <button class="button ghost" data-icon="folder" id="reveal-exports" type="button" title="Open the folder sent clips are saved in">Show in Finder</button>
+              <button class="button primary" data-icon="share" id="start-export" type="button" title="Save each clip, then choose where to send it" disabled>Send</button>
             </div>
           </section>
         </aside>
       </div>
     </div>
+    <div class="toast-region" id="toast-region" aria-live="polite"></div>
     <dialog class="settings-dialog" id="settings-dialog" aria-labelledby="settings-title">
       <form class="settings-shell" id="settings-form">
         <header class="settings-header"><h2 id="settings-title">Settings</h2><span id="settings-version"></span></header>
